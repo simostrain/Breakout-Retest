@@ -1,3 +1,4 @@
+import os
 import requests
 import time
 from datetime import datetime, timezone, timedelta
@@ -6,8 +7,8 @@ from collections import defaultdict
 
 # ==== Settings ====
 BINANCE_API = "https://api.binance.com"
-TELEGRAM_BOT_TOKEN = "7913078821:AAH_jUTHXlFx66daqBkYY7mKw7UZnwpp_A0"
-TELEGRAM_CHAT_ID = "1692583809"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 PUMP_THRESHOLD = 2.9  # percent
 reported = set()  # use a set of (symbol, hour) to avoid duplicates
 
