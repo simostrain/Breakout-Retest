@@ -10,6 +10,7 @@ BINANCE_API = "https://api.binance.com"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 PUMP_THRESHOLD = 2.9  # percent
+RSI_PERIOD = 14  # standard RSI period
 reported = set()  # avoid duplicate (symbol, hour)
 
 CUSTOM_TICKERS = [
@@ -58,6 +59,88 @@ def get_binance_server_time():
     except:
         return time.time()
 
+# ==== RSI Calculation ====
+def calculate_rsi_with_full_history(closes, period=14):
+    """
+    Calculate RSI using ALL available historical data for proper RMA convergence.
+    This matches TradingView/Binance exactly because RMA needs full history to converge properly.
+    
+    TradingView uses: RSI = 100 - (100 / (1 + RS))
+    Where RS = RMA(gains, period) / RMA(losses, period)
+    """
+    if len(closes) < period + 1:
+        return None
+    
+    # Calculate all price changes
+    changes = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+    
+    # Separate gains and losses
+    gains = [max(change, 0) for change in changes]
+    losses = [max(-change, 0) for change in changes]
+    
+    # Calculate initial RMA using SMA of first 'period' values
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    
+    # Apply Wilder's smoothing (RMA) to ALL remaining values
+    # This is the key - we need to smooth through ALL data, not just stop at period
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    
+    # Calculate final RSI
+    if avg_loss == 0:
+        return 100.0
+    
+    rs = avg_gain / avg_loss
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    
+    return round(rsi, 2)
+
+def calculate_rsi(candles, current_index, period=14):
+    """
+    Calculate RSI using RMA (Rolling Moving Average) - matches TradingView/Binance exactly.
+    TradingView uses: RSI = 100 - (100 / (1 + RS))
+    Where RS = RMA(gains, period) / RMA(losses, period)
+    RMA is Wilder's smoothing method.
+    """
+    # Need at least period + 1 candles
+    if current_index < period:
+        return None
+    
+    # Get closing prices - we need period+1 closes to get period changes
+    closes = [float(candles[i][4]) for i in range(current_index - period, current_index + 1)]
+    
+    if len(closes) < period + 1:
+        return None
+    
+    # Calculate all price changes first
+    changes = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+    
+    # Separate into gains and losses
+    gains = [max(change, 0) for change in changes]
+    losses = [max(-change, 0) for change in changes]
+    
+    # Calculate RMA (Wilder's smoothing)
+    # First value is SMA of first 'period' values
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    
+    # Then apply smoothing for remaining values
+    # RMA formula: (previous_RMA * (period-1) + current_value) / period
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    
+    # Calculate RS and RSI
+    if avg_loss == 0:
+        return 100.0
+    
+    rs = avg_gain / avg_loss
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    
+    return round(rsi, 2)
+
 # ==== Binance ====
 def get_usdt_pairs():
     candidates = list(dict.fromkeys([t.upper() + "USDT" for t in CUSTOM_TICKERS]))
@@ -74,7 +157,10 @@ def get_usdt_pairs():
 
 def fetch_pump_candles(symbol, now_utc, start_time):
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=46"
+        # Fetch more candles to have enough data for RSI calculation
+        # Need at least RSI_PERIOD + 1 candles before the pump
+        # Using 200 to ensure we have plenty of historical data
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=200"
         candles = session.get(url, timeout=60).json()
         if not candles or isinstance(candles, dict):
             return []
@@ -85,6 +171,11 @@ def fetch_pump_candles(symbol, now_utc, start_time):
             if candle_time < start_time or candle_time >= now_utc - timedelta(hours=1):
                 continue
 
+            # Skip first candle as we need previous close for percentage calculation
+            if i == 0:
+                continue
+
+            prev_close = float(candles[i-1][4])  # Previous candle's close
             open_p = float(c[1])
             high = float(c[2])
             low = float(c[3])
@@ -92,7 +183,8 @@ def fetch_pump_candles(symbol, now_utc, start_time):
             volume = float(c[5])
             vol_usdt = open_p * volume
 
-            pct = ((close - open_p) / open_p) * 100
+            # Calculate percentage change from previous close to current close (Binance method)
+            pct = ((close - prev_close) / prev_close) * 100
             if pct < PUMP_THRESHOLD:
                 continue
 
@@ -107,13 +199,23 @@ def fetch_pump_candles(symbol, now_utc, start_time):
             ma = sum(ma_vol) / len(ma_vol)
             vm = vol_usdt / ma if ma > 0 else 1.0
 
+            # === Calculate RSI ===
+            # Use ALL candles up to current index for proper RMA convergence
+            # This matches how TradingView/Binance calculates RSI
+            if i >= RSI_PERIOD:
+                # Get all closes from start up to current candle
+                all_closes = [float(candles[j][4]) for j in range(0, i + 1)]
+                rsi = calculate_rsi_with_full_history(all_closes, RSI_PERIOD)
+            else:
+                rsi = None
+
             # === Prices ===
             buy = (open_p + close) / 2
             sell = buy * 1.022
             sl = buy * 0.99
 
             hour = candle_time.strftime("%Y-%m-%d %H:00")
-            results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, cr, vm))
+            results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, cr, vm, rsi))
 
         return results
     except Exception as e:
@@ -134,23 +236,39 @@ def check_pumps(symbols):
 # ==== Report ====
 def format_report(pumps, duration):
     grouped = defaultdict(list)
-    for s, pct, c, b, se, sl, h, v, cr, vm in pumps:
-        grouped[h].append((s, pct, c, b, se, sl, v, cr, vm))
+    for s, pct, c, b, se, sl, h, v, cr, vm, rsi in pumps:
+        grouped[h].append((s, pct, c, b, se, sl, v, cr, vm, rsi))
 
-    report = f"⏱ {duration:.2f}s\n\n"
+    report = f"⏱ Scan: {duration:.2f}s\n\n"
+    
     for h in sorted(grouped):
         items = sorted(grouped[h], key=lambda x: x[8], reverse=True)
-        report += f"=== {h} UTC ===\n"
-        maxlen = max(len(i[0].replace("USDT","")) for i in items)
-
-        for s, pct, c, b, se, sl, v, cr, vm in items:
+        report += f"{'='*70}\n"
+        report += f"  {h} UTC\n"
+        report += f"{'='*70}\n"
+        
+        for s, pct, c, b, se, sl, v, cr, vm, rsi in items:
             sym = s.replace("USDT","")
-            mark = "🔥" if vm >= 1.5 and cr >= 80 else "  "
-            report += f"{mark}{sym:<{maxlen}} {pct:5.1f}% │ C:{c:g}\n"
-            report += f"{'':>{maxlen+2}} B:{b:.5g} │ S:{se:.5g} │ SL:{sl:.5g}\n"
-            report += f"{'':>{maxlen+2}} V:{format_volume(v)} │ VM:{vm:.1f}x │ CR:{cr:.0f}%\n"
+            
+            # Determine emoji based on RSI and other factors
+            if vm >= 1.5 and cr >= 80:
+                if rsi and rsi >= 70:
+                    mark = "🔥⚠️"
+                else:
+                    mark = "🔥 "
+            elif rsi and rsi >= 70:
+                mark = "⚠️ "
+            else:
+                mark = "  "
+            
+            rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
+            
+            # Two-line format: prices on line 1, metrics on line 2
+            report += f"{mark} {sym:8s} │ {pct:5.2f}% │ RSI:{rsi_str:5s} │ C:{c:.6g}\n"
+            report += f"{'':13s} │ VM:{vm:.1f}x │ Vol:{format_volume(v):7s} │ CR:{cr:.0f}%\n"
+        
         report += "\n"
-
+    
     return report
 
 # ==== Main ====
