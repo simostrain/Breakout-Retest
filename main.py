@@ -257,7 +257,7 @@ def format_report(pumps, duration):
             rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
             
             # Build the line
-            line = f"{sym:6s} {pct:5.2f} {rsi_str:5s} {vm:4.1f}x {format_volume(v):4s} {cr:3.0f}"
+            line = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:3.1f}x {format_volume(v):>4s} {cr:2.0f}"
             
             # Add symbol based on RSI
             if rsi:
