@@ -246,20 +246,19 @@ def format_report(pumps, duration):
     for h in sorted(grouped):
         items = sorted(grouped[h], key=lambda x: x[8], reverse=True)
         
-        report += f"{'═'*37}\n"
         report += f"  ⏰ {h} UTC\n"
-        report += f"{'═'*37}\n"
-        report += f"SYM    +%    RSI  VM    VOL    CR\n"
-        report += f"{'─'*37}\n"
+        report += f"{'─'*38}\n"
+        report += f"SYM      +%    RSI   VM     VOL   CR\n"
+        report += f"{'─'*38}\n"
         
         for s, pct, c, b, se, sl, v, cr, vm, rsi in items:
             sym = s.replace("USDT","")
             rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
             
-            # Super tight format
-            report += f"{sym:6s} {pct:5.2f} {rsi_str:4s} {vm:4.1f}x {format_volume(v):5s} {cr:3.0f}\n"
+            # Properly aligned columns
+            report += f"{sym:7s} {pct:5.2f} {rsi_str:5s} {vm:5.1f}x {format_volume(v):5s} {cr:3.0f}\n"
         
-        report += f"{'─'*37}\n\n"
+        report += f"{'─'*38}\n\n"
     
     return report
 
