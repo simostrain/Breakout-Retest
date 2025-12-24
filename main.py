@@ -41,7 +41,11 @@ session.mount("https://", adapter)
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg}, timeout=60)
+        requests.post(url, data={
+            "chat_id": TELEGRAM_CHAT_ID, 
+            "text": msg,
+            "parse_mode": "HTML"
+        }, timeout=60)
     except Exception as e:
         print("Telegram error:", e)
 
@@ -247,18 +251,28 @@ def format_report(pumps, duration):
         items = sorted(grouped[h], key=lambda x: x[8], reverse=True)
         
         report += f"  ⏰ {h} UTC\n"
-        report += f"{'─'*32}\n"
-        report += f"SYM     +%   RSI   VM    VOL  CR\n"
-        report += f"{'─'*32}\n"
         
         for s, pct, c, b, se, sl, v, cr, vm, rsi in items:
             sym = s.replace("USDT","")
             rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
             
-            # Compact aligned columns for mobile
-            report += f"{sym:6s} {pct:5.2f} {rsi_str:5s} {vm:4.1f}x {format_volume(v):4s} {cr:3.0f}\n"
+            # Build the line
+            line = f"{sym:6s} {pct:5.2f} {rsi_str:5s} {vm:4.1f}x {format_volume(v):4s} {cr:3.0f}"
+            
+            # Add symbol based on RSI
+            if rsi:
+                if rsi >= 65:
+                    symbol = "🔴"  # Red - Overbought
+                elif rsi >= 50:
+                    symbol = "🟢"  # Green - Good zone
+                else:
+                    symbol = "🟡"  # Yellow - Oversold
+            else:
+                symbol = "⚪"  # White - No RSI data
+            
+            report += f"{symbol} <code>{line}</code>\n"
         
-        report += f"{'─'*32}\n\n"
+        report += "\n"
     
     return report
 
