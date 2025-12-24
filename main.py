@@ -243,31 +243,21 @@ def format_report(pumps, duration):
     
     for h in sorted(grouped):
         items = sorted(grouped[h], key=lambda x: x[8], reverse=True)
-        report += f"{'='*70}\n"
-        report += f"  {h} UTC\n"
-        report += f"{'='*70}\n"
+        
+        report += f"{'='*75}\n"
+        report += f"  ⏰ {h} UTC\n"
+        report += f"{'='*75}\n"
+        report += f" SYMBOL   PUMP%    RSI        VM     VOLUME      CR    PRICE\n"
+        report += f"{'='*75}\n"
         
         for s, pct, c, b, se, sl, v, cr, vm, rsi in items:
             sym = s.replace("USDT","")
-            
-            # Determine emoji based on RSI and other factors
-            if vm >= 1.5 and cr >= 80:
-                if rsi and rsi >= 70:
-                    mark = "🔥⚠️"
-                else:
-                    mark = "🔥 "
-            elif rsi and rsi >= 70:
-                mark = "⚠️ "
-            else:
-                mark = "  "
-            
             rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
             
-            # Two-line format: prices on line 1, metrics on line 2
-            report += f"{mark} {sym:8s} │ {pct:5.2f}% │ RSI:{rsi_str:5s} │ C:{c:.6g}\n"
-            report += f"{'':13s} │ VM:{vm:.1f}x │ Vol:{format_volume(v):7s} │ CR:{cr:.0f}%\n"
+            # Format with exact column order: SYMBOL PUMP% RSI VM VOLUME CR PRICE
+            report += f" {sym:8s} {pct:6.2f}%  {rsi_str:5s}  {vm:6.1f}x  {format_volume(v):8s}  {cr:4.0f}%  {c:.6g}\n"
         
-        report += "\n"
+        report += f"{'─'*75}\n\n"
     
     return report
 
