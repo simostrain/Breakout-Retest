@@ -9,7 +9,7 @@ from collections import defaultdict
 BINANCE_API = "https://api.binance.com"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-PUMP_THRESHOLD = 2.9  # percent
+PUMP_THRESHOLD = 2.7  # percent
 RSI_PERIOD = 14  # standard RSI period
 reported = set()  # avoid duplicate (symbol, hour)
 
