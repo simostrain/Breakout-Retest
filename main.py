@@ -47,11 +47,13 @@ def send_telegram(msg):
 
 # ==== Utils ====
 def format_volume(v):
+    # Format volume as decimal millions (e.g., 1.40 for 1.40M, 0.36 for 360K)
     if v >= 1_000_000:
-        return f"{v/1_000_000:.2f}M"
-    if v >= 1_000:
-        return f"{v/1_000:.2f}K"
-    return str(int(v))
+        return f"{v/1_000_000:.2f}"
+    elif v >= 1_000:
+        return f"{v/1_000_000:.2f}"
+    else:
+        return f"{v/1_000_000:.2f}"
 
 def get_binance_server_time():
     try:
@@ -255,7 +257,7 @@ def format_report(pumps, duration):
             rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
             
             # Super tight format
-            report += f"{sym:6s} {pct:5.2f} {rsi_str:4s} {vm:4.1f}x {format_volume(v):5s} {cr:3.0f}%\n"
+            report += f"{sym:6s} {pct:5.2f} {rsi_str:4s} {vm:4.1f}x {format_volume(v):5s} {cr:3.0f}\n"
         
         report += f"{'─'*37}\n\n"
     
