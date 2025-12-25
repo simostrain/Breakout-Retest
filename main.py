@@ -271,11 +271,11 @@ def format_report(fresh, duration):
             sym = s.replace("USDT","")
             rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
             
-            # Show candles since last pump
-            csince_str = f"{csince:3d}"
+            # Show candles since last pump with leading zeros
+            csince_str = f"{csince:03d}"
             
             # Build the line without CR
-            line = f"{sym} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(v):>4s} {csince_str:>3s}"
+            line = f"{sym:6s} {pct:5.2f} {rsi_str:5s} {vm:4.1f}x {format_volume(v):4s} {csince_str}"
             
             # Determine symbol - use ✅ for 20+ candles override
             if csince >= 20:
