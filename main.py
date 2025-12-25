@@ -170,8 +170,17 @@ def fetch_pump_candles(symbol, now_utc, start_time):
             return []
 
         results = []
-        last_pump_index = None  # Track last pump index for this symbol
         
+        # First pass: identify all pump indices
+        pump_indices = []
+        for i in range(1, len(candles)):
+            prev_close = float(candles[i-1][4])
+            close = float(candles[i][4])
+            pct = ((close - prev_close) / prev_close) * 100
+            if pct >= PUMP_THRESHOLD:
+                pump_indices.append(i)
+        
+        # Second pass: process pumps in our time window
         for i, c in enumerate(candles):
             candle_time = datetime.fromtimestamp(c[0]/1000, tz=timezone.utc)
             if candle_time < start_time or candle_time >= now_utc - timedelta(hours=1):
@@ -181,7 +190,7 @@ def fetch_pump_candles(symbol, now_utc, start_time):
             if i == 0:
                 continue
 
-            prev_close = float(candles[i-1][4])  # Previous candle's close
+            prev_close = float(candles[i-1][4])
             open_p = float(c[1])
             high = float(c[2])
             low = float(c[3])
@@ -192,18 +201,19 @@ def fetch_pump_candles(symbol, now_utc, start_time):
             # Calculate percentage change from previous close to current close (Binance method)
             pct = ((close - prev_close) / prev_close) * 100
             
-            # Check if this is a pump
-            is_pump = pct >= PUMP_THRESHOLD
+            # Only process if this is a pump
+            if pct < PUMP_THRESHOLD:
+                continue
             
             # Calculate candles since last pump
-            if is_pump:
-                if last_pump_index is not None:
-                    candles_since_last = i - last_pump_index
-                else:
-                    candles_since_last = 999  # First pump detected
-                last_pump_index = i
+            # Find previous pump before current index
+            prev_pumps = [idx for idx in pump_indices if idx < i]
+            if prev_pumps:
+                last_pump_index = prev_pumps[-1]
+                candles_since_last = i - last_pump_index
             else:
-                continue  # Only process pumps
+                # No previous pump found in history
+                candles_since_last = 200  # Max history we have
 
             candle_range = high - low
             cr = ((close - low) / candle_range) * 100 if candle_range > 0 else 50
@@ -264,11 +274,8 @@ def format_report(fresh, duration):
             sym = s.replace("USDT","")
             rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
             
-            # Show candles since last pump (or "1st" if first pump)
-            if csince == 999:
-                csince_str = "1st"
-            else:
-                csince_str = f"{csince:3d}"
+            # Show candles since last pump
+            csince_str = f"{csince:3d}"
             
             # Build the line
             line = f"{sym:6s} {pct:5.2f} {rsi_str:5s} {vm:4.1f}x {format_volume(v):4s} {cr:3.0f} {csince_str:>4s}"
