@@ -275,7 +275,7 @@ def format_report(fresh, duration):
             csince_str = f"{csince:3d}"
             
             # Build the line without CR
-            line = f"{sym:6s} {pct:5.2f} {rsi_str:5s} {vm:3.1f} {format_volume(v):4s} {csince_str:>4s}"
+            line = f"{sym} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(v):>4s} {csince_str:>3s}"
             
             # Determine symbol - use ✅ for 20+ candles override
             if csince >= 20:
