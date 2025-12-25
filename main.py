@@ -10,6 +10,7 @@ BINANCE_API = "https://api.binance.com"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TELEGRAM_BOT_TOKEN_2 = os.getenv("TELEGRAM_BOT_TOKEN_2")  # Second bot for red/checkmark signals
+TELEGRAM_CHAT_ID_2 = os.getenv("TELEGRAM_CHAT_ID_2")  # Second chat ID
 PUMP_THRESHOLD = 2.9  # percent
 RSI_PERIOD = 14  # standard RSI period
 reported = set()  # avoid duplicate (symbol, hour)
@@ -42,13 +43,15 @@ session.mount("https://", adapter)
 def send_telegram(msg, bot_num=1):
     if bot_num == 1:
         bot_token = TELEGRAM_BOT_TOKEN
+        chat_id = TELEGRAM_CHAT_ID
     else:
         bot_token = TELEGRAM_BOT_TOKEN_2
+        chat_id = TELEGRAM_CHAT_ID_2
     
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     try:
         requests.post(url, data={
-            "chat_id": TELEGRAM_CHAT_ID,  # Same chat ID for both bots
+            "chat_id": chat_id,
             "text": msg,
             "parse_mode": "HTML"
         }, timeout=60)
@@ -287,7 +290,7 @@ def format_report(fresh, duration):
             csince_str = f"{csince:03d}"
             
             # Build the line without CR
-            line = f"{sym:6s} {pct:5.2f} {rsi_str:5s} {vm:4.1f}x {format_volume(v):4s} {csince_str}"
+            line = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(v):4s} {csince_str}"
             
             # Determine symbol and which bot to send to
             if csince >= 20:
