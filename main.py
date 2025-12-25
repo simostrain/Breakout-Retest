@@ -215,9 +215,6 @@ def fetch_pump_candles(symbol, now_utc, start_time):
                 # No previous pump found in history
                 candles_since_last = 200  # Max history we have
 
-            candle_range = high - low
-            cr = ((close - low) / candle_range) * 100 if candle_range > 0 else 50
-
             ma_start = max(0, i - 19)
             ma_vol = [
                 float(candles[j][1]) * float(candles[j][5])
@@ -240,7 +237,7 @@ def fetch_pump_candles(symbol, now_utc, start_time):
             sl = buy * 0.99
 
             hour = candle_time.strftime("%Y-%m-%d %H:00")
-            results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, cr, vm, rsi, candles_since_last))
+            results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, vm, rsi, candles_since_last))
 
         return results
     except Exception as e:
@@ -266,19 +263,19 @@ def format_report(fresh, duration):
     report = f"⏱ Scan: {duration:.2f}s\n\n"
     
     for h in sorted(grouped):
-        items = sorted(grouped[h], key=lambda x: x[9], reverse=True)
+        items = sorted(grouped[h], key=lambda x: x[8], reverse=True)
         
         report += f"  ⏰ {h} UTC\n"
         
-        for s, pct, c, b, se, sl, hour, v, cr, vm, rsi, csince in items:
+        for s, pct, c, b, se, sl, hour, v, vm, rsi, csince in items:
             sym = s.replace("USDT","")
             rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
             
             # Show candles since last pump
             csince_str = f"{csince:3d}"
             
-            # Build the line
-            line = f"{sym:7s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(v):>4s} {cr:3.0f} {csince_str:>3s}"
+            # Build the line without CR
+            line = f"{sym:6s} {pct:5.2f} {rsi_str:5s} {vm:3.1f} {format_volume(v):4s} {csince_str:>4s}"
             
             # Determine symbol - use ✅ for 20+ candles override
             if csince >= 20:
