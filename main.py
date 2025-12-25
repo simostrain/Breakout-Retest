@@ -9,6 +9,7 @@ from collections import defaultdict
 BINANCE_API = "https://api.binance.com"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_BOT_TOKEN_2 = os.getenv("TELEGRAM_BOT_TOKEN_2")  # Second bot for red/checkmark signals
 PUMP_THRESHOLD = 2.9  # percent
 RSI_PERIOD = 14  # standard RSI period
 reported = set()  # avoid duplicate (symbol, hour)
@@ -38,16 +39,21 @@ adapter = requests.adapters.HTTPAdapter(pool_connections=50, pool_maxsize=50, ma
 session.mount("https://", adapter)
 
 # ==== Telegram ====
-def send_telegram(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+def send_telegram(msg, bot_num=1):
+    if bot_num == 1:
+        bot_token = TELEGRAM_BOT_TOKEN
+    else:
+        bot_token = TELEGRAM_BOT_TOKEN_2
+    
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     try:
         requests.post(url, data={
-            "chat_id": TELEGRAM_CHAT_ID, 
+            "chat_id": TELEGRAM_CHAT_ID,  # Same chat ID for both bots
             "text": msg,
             "parse_mode": "HTML"
         }, timeout=60)
     except Exception as e:
-        print("Telegram error:", e)
+        print(f"Telegram error (bot {bot_num}):", e)
 
 # ==== Utils ====
 def format_volume(v):
@@ -260,12 +266,18 @@ def format_report(fresh, duration):
     for p in fresh:
         grouped[p[6]].append(p)
 
-    report = f"⏱ Scan: {duration:.2f}s\n\n"
+    # Separate reports for two bots
+    report_bot1 = f"⏱ Scan: {duration:.2f}s\n\n"  # Yellow and Green
+    report_bot2 = f"⏱ Scan: {duration:.2f}s\n\n"  # Red and Checkmark
+    
+    bot1_has_data = False
+    bot2_has_data = False
     
     for h in sorted(grouped):
         items = sorted(grouped[h], key=lambda x: x[8], reverse=True)
         
-        report += f"  ⏰ {h} UTC\n"
+        bot1_lines = []
+        bot2_lines = []
         
         for s, pct, c, b, se, sl, hour, v, vm, rsi, csince in items:
             sym = s.replace("USDT","")
@@ -275,26 +287,41 @@ def format_report(fresh, duration):
             csince_str = f"{csince:03d}"
             
             # Build the line without CR
-            line = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(v):4s} {csince_str}"
+            line = f"{sym:6s} {pct:5.2f} {rsi_str:5s} {vm:4.1f}x {format_volume(v):4s} {csince_str}"
             
-            # Determine symbol - use ✅ for 20+ candles override
+            # Determine symbol and which bot to send to
             if csince >= 20:
-                symbol = "✅"  # Light green check - no pump in last 20 candles
+                symbol = "✅"
+                bot2_lines.append(f"{symbol} <code>{line}</code>\n")
             elif rsi:
                 if rsi >= 65:
-                    symbol = "🔴"  # Red - Overbought
+                    symbol = "🔴"
+                    bot2_lines.append(f"{symbol} <code>{line}</code>\n")
                 elif rsi >= 50:
-                    symbol = "🟢"  # Dark green - Good zone
+                    symbol = "🟢"
+                    bot1_lines.append(f"{symbol} <code>{line}</code>\n")
                 else:
-                    symbol = "🟡"  # Yellow - Oversold
+                    symbol = "🟡"
+                    bot1_lines.append(f"{symbol} <code>{line}</code>\n")
             else:
-                symbol = "⚪"  # White - No RSI data
-            
-            report += f"{symbol} <code>{line}</code>\n"
+                symbol = "⚪"
+                bot1_lines.append(f"{symbol} <code>{line}</code>\n")
         
-        report += "\n"
+        # Add to respective reports if there's data
+        if bot1_lines:
+            report_bot1 += f"  ⏰ {h} UTC\n"
+            report_bot1 += "".join(bot1_lines)
+            report_bot1 += "\n"
+            bot1_has_data = True
+            
+        if bot2_lines:
+            report_bot2 += f"  ⏰ {h} UTC\n"
+            report_bot2 += "".join(bot2_lines)
+            report_bot2 += "\n"
+            bot2_has_data = True
     
-    return report
+    return (report_bot1 if bot1_has_data else None, 
+            report_bot2 if bot2_has_data else None)
 
 # ==== Main ====
 def main():
@@ -315,9 +342,22 @@ def main():
                 fresh.append(p)
 
         if fresh:
-            msg = format_report(fresh, duration)
-            print(msg)
-            send_telegram(msg[:4096])
+            report_bot1, report_bot2 = format_report(fresh, duration)
+            
+            # Send to bot 1 (Yellow 🟡 and Green 🟢)
+            if report_bot1:
+                print("Bot 1 (Yellow/Green):")
+                print(report_bot1)
+                send_telegram(report_bot1[:4096], bot_num=1)
+            
+            # Send to bot 2 (Red 🔴 and Checkmark ✅)
+            if report_bot2:
+                print("Bot 2 (Red/Checkmark):")
+                print(report_bot2)
+                send_telegram(report_bot2[:4096], bot_num=2)
+            
+            if not report_bot1 and not report_bot2:
+                print("No pumps this hour.")
         else:
             print("No pumps this hour.")
 
