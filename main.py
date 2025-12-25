@@ -9,7 +9,7 @@ from collections import defaultdict
 BINANCE_API = "https://api.binance.com"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-PUMP_THRESHOLD = 2.7  # percent
+PUMP_THRESHOLD = 2.9  # percent
 RSI_PERIOD = 14  # standard RSI period
 reported = set()  # avoid duplicate (symbol, hour)
 
@@ -163,15 +163,15 @@ def get_usdt_pairs():
 
 def fetch_pump_candles(symbol, now_utc, start_time):
     try:
-        # Fetch more candles to have enough data for RSI calculation
-        # Need at least RSI_PERIOD + 1 candles before the pump
-        # Using 200 to ensure we have plenty of historical data
+        # Fetch more candles to have enough data for RSI calculation and pump history
         url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=200"
         candles = session.get(url, timeout=60).json()
         if not candles or isinstance(candles, dict):
             return []
 
         results = []
+        last_pump_index = None  # Track last pump index for this symbol
+        
         for i, c in enumerate(candles):
             candle_time = datetime.fromtimestamp(c[0]/1000, tz=timezone.utc)
             if candle_time < start_time or candle_time >= now_utc - timedelta(hours=1):
@@ -191,8 +191,19 @@ def fetch_pump_candles(symbol, now_utc, start_time):
 
             # Calculate percentage change from previous close to current close (Binance method)
             pct = ((close - prev_close) / prev_close) * 100
-            if pct < PUMP_THRESHOLD:
-                continue
+            
+            # Check if this is a pump
+            is_pump = pct >= PUMP_THRESHOLD
+            
+            # Calculate candles since last pump
+            if is_pump:
+                if last_pump_index is not None:
+                    candles_since_last = i - last_pump_index
+                else:
+                    candles_since_last = 999  # First pump detected
+                last_pump_index = i
+            else:
+                continue  # Only process pumps
 
             candle_range = high - low
             cr = ((close - low) / candle_range) * 100 if candle_range > 0 else 50
@@ -207,9 +218,7 @@ def fetch_pump_candles(symbol, now_utc, start_time):
 
             # === Calculate RSI ===
             # Use ALL candles up to current index for proper RMA convergence
-            # This matches how TradingView/Binance calculates RSI
             if i >= RSI_PERIOD:
-                # Get all closes from start up to current candle
                 all_closes = [float(candles[j][4]) for j in range(0, i + 1)]
                 rsi = calculate_rsi_with_full_history(all_closes, RSI_PERIOD)
             else:
@@ -221,7 +230,7 @@ def fetch_pump_candles(symbol, now_utc, start_time):
             sl = buy * 0.99
 
             hour = candle_time.strftime("%Y-%m-%d %H:00")
-            results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, cr, vm, rsi))
+            results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, cr, vm, rsi, candles_since_last))
 
         return results
     except Exception as e:
@@ -239,32 +248,39 @@ def check_pumps(symbols):
 
     return pumps
 
-# ==== Report ====
-def format_report(pumps, duration):
+def format_report(fresh, duration):
     grouped = defaultdict(list)
-    for s, pct, c, b, se, sl, h, v, cr, vm, rsi in pumps:
-        grouped[h].append((s, pct, c, b, se, sl, v, cr, vm, rsi))
+    for p in fresh:
+        grouped[p[6]].append(p)
 
     report = f"⏱ Scan: {duration:.2f}s\n\n"
     
     for h in sorted(grouped):
-        items = sorted(grouped[h], key=lambda x: x[8], reverse=True)
+        items = sorted(grouped[h], key=lambda x: x[9], reverse=True)
         
         report += f"  ⏰ {h} UTC\n"
         
-        for s, pct, c, b, se, sl, v, cr, vm, rsi in items:
+        for s, pct, c, b, se, sl, hour, v, cr, vm, rsi, csince in items:
             sym = s.replace("USDT","")
             rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
             
-            # Build the line
-            line = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:3.1f}x {format_volume(v):>4s} {cr:2.0f}"
+            # Show candles since last pump (or "1st" if first pump)
+            if csince == 999:
+                csince_str = "1st"
+            else:
+                csince_str = f"{csince:3d}"
             
-            # Add symbol based on RSI
-            if rsi:
+            # Build the line
+            line = f"{sym:6s} {pct:5.2f} {rsi_str:5s} {vm:4.1f}x {format_volume(v):4s} {cr:3.0f} {csince_str:>4s}"
+            
+            # Determine symbol - use ✅ for 20+ candles override
+            if csince >= 20:
+                symbol = "✅"  # Light green check - no pump in last 20 candles
+            elif rsi:
                 if rsi >= 65:
                     symbol = "🔴"  # Red - Overbought
                 elif rsi >= 50:
-                    symbol = "🟢"  # Green - Good zone
+                    symbol = "🟢"  # Dark green - Good zone
                 else:
                     symbol = "🟡"  # Yellow - Oversold
             else:
