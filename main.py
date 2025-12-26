@@ -11,7 +11,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TELEGRAM_BOT_TOKEN_2 = os.getenv("TELEGRAM_BOT_TOKEN_2")  # Second bot for red/checkmark signals
 TELEGRAM_CHAT_ID_2 = os.getenv("TELEGRAM_CHAT_ID_2")  # Second chat ID
-PUMP_THRESHOLD = 2.9  # percent
+PUMP_THRESHOLD = 2.7  # percent
 RSI_PERIOD = 14  # standard RSI period
 reported = set()  # avoid duplicate (symbol, hour)
 
