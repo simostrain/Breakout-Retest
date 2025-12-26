@@ -264,6 +264,113 @@ def check_pumps(symbols):
 
     return pumps
 
+def check_pumps_lower_threshold(symbols):
+    """Check for pumps with lower 2.0% threshold for Bot 1 backup"""
+    now_utc = datetime.now(timezone.utc)
+    start_time = (now_utc - timedelta(days=1)).replace(hour=22, minute=0, second=0, microsecond=0)
+    pumps = []
+    
+    # Temporarily change threshold to 2.0%
+    global PUMP_THRESHOLD
+    original_threshold = PUMP_THRESHOLD
+    PUMP_THRESHOLD = 2.0
+
+    with ThreadPoolExecutor(max_workers=60) as ex:
+        for f in as_completed([ex.submit(fetch_pump_candles, s, now_utc, start_time) for s in symbols]):
+            pumps.extend(f.result() or [])
+    
+    # Restore original threshold
+    PUMP_THRESHOLD = original_threshold
+    return pumps
+
+def check_pumps_low_threshold(symbols):
+    """Check pumps with lower threshold (2.0%) for Bot 1 fallback"""
+    now_utc = datetime.now(timezone.utc)
+    start_time = (now_utc - timedelta(days=1)).replace(hour=22, minute=0, second=0, microsecond=0)
+    pumps = []
+
+    with ThreadPoolExecutor(max_workers=60) as ex:
+        for f in as_completed([ex.submit(fetch_pump_candles_low, s, now_utc, start_time) for s in symbols]):
+            pumps.extend(f.result() or [])
+
+    return pumps
+
+def fetch_pump_candles_low(symbol, now_utc, start_time):
+    """Same as fetch_pump_candles but with 2.0% threshold"""
+    try:
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=200"
+        candles = session.get(url, timeout=60).json()
+        if not candles or isinstance(candles, dict):
+            return []
+
+        results = []
+        
+        # First pass: identify all pump indices with 2.0% threshold
+        pump_indices = []
+        for i in range(1, len(candles)):
+            prev_close = float(candles[i-1][4])
+            close = float(candles[i][4])
+            pct = ((close - prev_close) / prev_close) * 100
+            if pct >= 2.0:  # Lower threshold
+                pump_indices.append(i)
+        
+        # Second pass: process pumps in our time window
+        for i, c in enumerate(candles):
+            candle_time = datetime.fromtimestamp(c[0]/1000, tz=timezone.utc)
+            if candle_time < start_time or candle_time >= now_utc - timedelta(hours=1):
+                continue
+
+            if i == 0:
+                continue
+
+            prev_close = float(candles[i-1][4])
+            open_p = float(c[1])
+            high = float(c[2])
+            low = float(c[3])
+            close = float(c[4])
+            volume = float(c[5])
+            vol_usdt = open_p * volume
+
+            pct = ((close - prev_close) / prev_close) * 100
+            
+            if pct < 2.0:  # Lower threshold
+                continue
+            
+            # Calculate candles since last pump
+            prev_pumps = [idx for idx in pump_indices if idx < i]
+            if prev_pumps:
+                last_pump_index = prev_pumps[-1]
+                candles_since_last = i - last_pump_index
+            else:
+                candles_since_last = 200
+
+            ma_start = max(0, i - 19)
+            ma_vol = [
+                float(candles[j][1]) * float(candles[j][5])
+                for j in range(ma_start, i + 1)
+            ]
+            ma = sum(ma_vol) / len(ma_vol)
+            vm = vol_usdt / ma if ma > 0 else 1.0
+
+            # Calculate RSI
+            if i >= RSI_PERIOD:
+                all_closes = [float(candles[j][4]) for j in range(0, i + 1)]
+                rsi = calculate_rsi_with_full_history(all_closes, RSI_PERIOD)
+            else:
+                rsi = None
+
+            buy = (open_p + close) / 2
+            sell = buy * 1.022
+            sl = buy * 0.99
+
+            hour = candle_time.strftime("%Y-%m-%d %H:00")
+            results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, vm, rsi, candles_since_last))
+
+        return results
+    except Exception as e:
+        print(f"{symbol} error:", e)
+        return []
+
 def format_report(fresh, duration):
     grouped = defaultdict(list)
     for p in fresh:
@@ -352,15 +459,34 @@ def main():
         if fresh:
             report_bot1, report_bot2 = format_report(fresh, duration)
             
-            # Send to bot 1 (Yellow 🟡 and Green 🟢)
-            if report_bot1:
-                print("Bot 1 (Yellow/Green):")
+            # If Bot 1 has no data, try with lower threshold (2.0%)
+            if not report_bot1:
+                print("Bot 1 has no pumps with 2.7% threshold, trying 2.0%...")
+                pumps_lower = check_pumps_lower_threshold(symbols)
+                duration_lower = time.time() - start
+                
+                fresh_lower = []
+                for p in pumps_lower:
+                    key = (p[0], p[6])
+                    if key not in reported:
+                        reported.add(key)
+                        fresh_lower.append(p)
+                
+                if fresh_lower:
+                    report_bot1_lower, _ = format_report(fresh_lower, duration_lower)
+                    if report_bot1_lower:
+                        print("Bot 1 (Yellow/Green) - 2.0% threshold:")
+                        print(report_bot1_lower)
+                        send_telegram(report_bot1_lower[:4096], bot_num=1)
+            else:
+                # Send to bot 1 (Yellow 🟡 and Green 🟢)
+                print("Bot 1 (Yellow/Green) - 2.7% threshold:")
                 print(report_bot1)
                 send_telegram(report_bot1[:4096], bot_num=1)
             
-            # Send to bot 2 (Red 🔴 and Checkmark ✅)
+            # Send to bot 2 (Red 🔴 and Checkmark ✅) - always 2.7%
             if report_bot2:
-                print("Bot 2 (Red/Checkmark):")
+                print("Bot 2 (Red/Checkmark) - 2.7% threshold:")
                 print(report_bot2)
                 send_telegram(report_bot2[:4096], bot_num=2)
             
