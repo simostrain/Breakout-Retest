@@ -289,21 +289,26 @@ def format_report(fresh, duration):
             # Show candles since last pump with leading zeros
             csince_str = f"{csince:03d}"
             
-            # Build the line without CR
+            # Build the line
             line = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(v):4s} {csince_str}"
             
             # Determine symbol and which bot to send to
-            if csince >= 20:
-                symbol = "✅"
-                bot2_lines.append(f"{symbol} <code>{line}</code>\n")
-            elif rsi:
-                if rsi >= 65:
-                    symbol = "🔴"
-                    bot2_lines.append(f"{symbol} <code>{line}</code>\n")
+            if rsi:
+                if rsi >= 66:
+                    if csince >= 20:
+                        # Checkmark: RSI ≥66 AND 20+ candles since last pump
+                        symbol = "✅"
+                        bot2_lines.append(f"{symbol} <code>{line}</code>\n")
+                    else:
+                        # Red: RSI ≥66 AND recent pump (<20 candles)
+                        symbol = "🔴"
+                        bot2_lines.append(f"{symbol} <code>{line}</code>\n")
                 elif rsi >= 50:
+                    # Green: Good RSI zone (50-65)
                     symbol = "🟢"
                     bot1_lines.append(f"{symbol} <code>{line}</code>\n")
                 else:
+                    # Yellow: RSI too low (<50)
                     symbol = "🟡"
                     bot1_lines.append(f"{symbol} <code>{line}</code>\n")
             else:
