@@ -7,7 +7,7 @@ from collections import defaultdict
 
 # ==== Settings ====
 BINANCE_API = "https://api.binance.com"
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN_15MIN")  # Different bot for 15min
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # Different bot for 15min
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 PUMP_THRESHOLD = 2.0  # percent (changed from 2.9 to 2.0)
 RSI_PERIOD = 14  # standard RSI period
