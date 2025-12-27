@@ -7,11 +7,11 @@ from collections import defaultdict
 
 # ==== Settings ====
 BINANCE_API = "https://api.binance.com"
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN_15MIN")  # Different bot for 15min
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-PUMP_THRESHOLD = 2.9  # percent
+PUMP_THRESHOLD = 2.0  # percent (changed from 2.9 to 2.0)
 RSI_PERIOD = 14  # standard RSI period
-reported = set()  # avoid duplicate (symbol, hour)
+reported = set()  # avoid duplicate (symbol, timeframe)
 
 CUSTOM_TICKERS = [
     "At","A2Z","ACE","ACH","ACT","ADA","ADX","AGLD","AIXBT","Algo","ALICE","ALPINE","ALT","AMP","ANKR","APE",
@@ -163,8 +163,8 @@ def get_usdt_pairs():
 
 def fetch_pump_candles(symbol, now_utc, start_time):
     try:
-        # Fetch more candles to have enough data for RSI calculation and pump history
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=200"
+        # Fetch 15-minute candles (200 candles = 50 hours of data)
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=15m&limit=200"
         candles = session.get(url, timeout=60).json()
         if not candles or isinstance(candles, dict):
             return []
@@ -183,7 +183,7 @@ def fetch_pump_candles(symbol, now_utc, start_time):
         # Second pass: process pumps in our time window
         for i, c in enumerate(candles):
             candle_time = datetime.fromtimestamp(c[0]/1000, tz=timezone.utc)
-            if candle_time < start_time or candle_time >= now_utc - timedelta(hours=1):
+            if candle_time < start_time or candle_time >= now_utc - timedelta(minutes=15):
                 continue
 
             # Skip first candle as we need previous close for percentage calculation
@@ -236,7 +236,7 @@ def fetch_pump_candles(symbol, now_utc, start_time):
             sell = buy * 1.022
             sl = buy * 0.99
 
-            hour = candle_time.strftime("%Y-%m-%d %H:00")
+            hour = candle_time.strftime("%Y-%m-%d %H:%M")
             results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, vm, rsi, candles_since_last))
 
         return results
@@ -246,7 +246,8 @@ def fetch_pump_candles(symbol, now_utc, start_time):
 
 def check_pumps(symbols):
     now_utc = datetime.now(timezone.utc)
-    start_time = (now_utc - timedelta(days=1)).replace(hour=22, minute=0, second=0, microsecond=0)
+    # For 15min candles, look back 12 hours instead of 1 day
+    start_time = now_utc - timedelta(hours=12)
     pumps = []
 
     with ThreadPoolExecutor(max_workers=60) as ex:
@@ -308,7 +309,7 @@ def fetch_pump_candles_low(symbol, now_utc, start_time):
         # Second pass: process pumps in our time window
         for i, c in enumerate(candles):
             candle_time = datetime.fromtimestamp(c[0]/1000, tz=timezone.utc)
-            if candle_time < start_time or candle_time >= now_utc - timedelta(hours=1):
+            if candle_time < start_time or candle_time >= now_utc - timedelta(minutes=15):
                 continue
 
             if i == 0:
@@ -354,7 +355,7 @@ def fetch_pump_candles_low(symbol, now_utc, start_time):
             sell = buy * 1.022
             sl = buy * 0.99
 
-            hour = candle_time.strftime("%Y-%m-%d %H:00")
+            hour = candle_time.strftime("%Y-%m-%d %H:%M")
             results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, vm, rsi, candles_since_last))
 
         return results
@@ -382,7 +383,7 @@ def format_report(fresh, duration):
             csince_str = f"{csince:03d}"
             
             # Build the line
-            line = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(v):4s} {csince_str}"
+            line = f"{sym:6s} {pct:5.2f} {rsi_str:5s} {vm:4.1f}x {format_volume(v):4s} {csince_str}"
             
             # Determine symbol based on RSI and csince
             if rsi:
@@ -427,11 +428,12 @@ def main():
             print(msg)
             send_telegram(msg[:4096])
         else:
-            print("No pumps this hour.")
+            print("No pumps in last 15 minutes.")
 
         server = get_binance_server_time()
-        next_hour = (server // 3600 + 1) * 3600
-        time.sleep(max(0, next_hour - server + 1))
+        # Wait until next 15-minute mark
+        next_15min = ((server // 900) + 1) * 900  # 900 seconds = 15 minutes
+        time.sleep(max(0, next_15min - server + 1))
 
 if __name__ == "__main__":
     main()
