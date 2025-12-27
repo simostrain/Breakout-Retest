@@ -486,7 +486,7 @@ def main():
             
             # Send to bot 2 (Red 🔴 and Checkmark ✅) - always 2.7%
             if report_bot2:
-                print("Bot 2 (Red/Checkmark) - 2.7% threshold:")
+                print("Bot 2 (Red/Checkmark) - 2.% threshold:")
                 print(report_bot2)
                 send_telegram(report_bot2[:4096], bot_num=2)
             
