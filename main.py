@@ -324,7 +324,7 @@ def fetch_pump_candles_low(symbol, now_utc, start_time):
 
             pct = ((close - prev_close) / prev_close) * 100
             
-            if pct < 2.0:  # Lower threshold
+            if pct < 2.7:  # Lower threshold
                 continue
             
             # Calculate candles since last pump
