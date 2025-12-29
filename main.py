@@ -164,7 +164,7 @@ def get_usdt_pairs():
 def fetch_pump_candles(symbol, now_utc, start_time):
     try:
         # Fetch more candles to have enough data for RSI calculation and pump history
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=200"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=250"
         candles = session.get(url, timeout=60).json()
         if not candles or isinstance(candles, dict):
             return []
@@ -213,7 +213,7 @@ def fetch_pump_candles(symbol, now_utc, start_time):
                 candles_since_last = i - last_pump_index
             else:
                 # No previous pump found in history
-                candles_since_last = 200  # Max history we have
+                candles_since_last = 250  # Max history we have
 
             ma_start = max(0, i - 19)
             ma_vol = [
@@ -289,7 +289,7 @@ def check_pumps_low_threshold(symbols):
 def fetch_pump_candles_low(symbol, now_utc, start_time):
     """Same as fetch_pump_candles but with 2.0% threshold"""
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=200"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=250"
         candles = session.get(url, timeout=60).json()
         if not candles or isinstance(candles, dict):
             return []
@@ -333,7 +333,7 @@ def fetch_pump_candles_low(symbol, now_utc, start_time):
                 last_pump_index = prev_pumps[-1]
                 candles_since_last = i - last_pump_index
             else:
-                candles_since_last = 200
+                candles_since_last = 250
 
             ma_start = max(0, i - 19)
             ma_vol = [
