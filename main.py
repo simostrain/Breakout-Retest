@@ -9,7 +9,7 @@ from collections import defaultdict
 BINANCE_API = "https://api.binance.com"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-PUMP_THRESHOLD = 2.7  # percent
+PUMP_THRESHOLD = 3  # percent
 RSI_PERIOD = 14  # standard RSI period
 reported = set()  # avoid duplicate (symbol, hour)
 
@@ -302,7 +302,7 @@ def fetch_pump_candles_low(symbol, now_utc, start_time):
             prev_close = float(candles[i-1][4])
             close = float(candles[i][4])
             pct = ((close - prev_close) / prev_close) * 100
-            if pct >= 2.0:  # Lower threshold
+            if pct >= 3:  # Lower threshold
                 pump_indices.append(i)
         
         # Second pass: process pumps in our time window
@@ -324,7 +324,7 @@ def fetch_pump_candles_low(symbol, now_utc, start_time):
 
             pct = ((close - prev_close) / prev_close) * 100
             
-            if pct < 2.7:  # Lower threshold
+            if pct < 3:  # Lower threshold
                 continue
             
             # Calculate candles since last pump
