@@ -331,7 +331,7 @@ def fetch_pump_candles(symbol, now_utc, start_time):
             sl = buy * 0.99
 
             hour = candle_time.strftime("%Y-%m-%d %H:00")
-            results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, vm, rsi, candles_since_last, direction, trend_change))
+            results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, vm, rsi, candles_since_last, direction, trend_change, supertrend_value))
 
         return results
     except Exception as e:
@@ -462,7 +462,7 @@ def fetch_pump_candles_low(symbol, now_utc, start_time):
             sl = buy * 0.99
 
             hour = candle_time.strftime("%Y-%m-%d %H:00")
-            results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, vm, rsi, candles_since_last, direction, trend_change))
+            results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, vm, rsi, candles_since_last, direction, trend_change, supertrend_value))
 
         return results
     except Exception as e:
@@ -484,22 +484,28 @@ def format_report(fresh, duration):
         
         report += f"  ⏰ {h} UTC\n"
         
-        for s, pct, c, b, se, sl, hour, v, vm, rsi, csince, st_direction, trend_change in items:
+        for s, pct, c, b, se, sl, hour, v, vm, rsi, csince, st_direction, trend_change, st_value in items:
             sym = s.replace("USDT","")
             rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
             
             # Show candles since last pump with leading zeros
             csince_str = f"{csince:03d}"
             
-            # Supertrend direction indicator
-            if st_direction == -1:
-                st_str = "🟢"  # Uptrend
-            elif st_direction == 1:
-                st_str = "🔴"  # Downtrend
+            # Calculate distance from Supertrend line
+            if st_direction is not None and st_value is not None:
+                # Distance percentage from current close to Supertrend line
+                distance_pct = ((c - st_value) / st_value) * 100
+                
+                if st_direction == -1:  # Uptrend
+                    # Price is above ST line, show positive distance
+                    st_str = f"🟢{distance_pct:+.1f}%"
+                else:  # Downtrend
+                    # Price is below ST line, show negative distance
+                    st_str = f"🔴{distance_pct:+.1f}%"
             else:
-                st_str = "⚪"  # No data
+                st_str = "⚪N/A"
             
-            # Build the line with Supertrend
+            # Build the line with Supertrend distance
             line = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(v):4s} {csince_str} {st_str}"
             
             # Determine symbol based on RSI and csince
