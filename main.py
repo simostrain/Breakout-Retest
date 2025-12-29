@@ -370,7 +370,7 @@ def format_report(fresh, duration):
     report = f"⏱ Scan: {duration:.2f}s\n\n"
     
     for h in sorted(grouped):
-        items = sorted(grouped[h], key=lambda x: x[8], reverse=True)
+        items = sorted(grouped[h], key=lambda x: x[7], reverse=True)  # Changed from x[8] (VM) to x[7] (volume)
         
         report += f"  ⏰ {h} UTC\n"
         
