@@ -147,6 +147,87 @@ def calculate_rsi(candles, current_index, period=14):
     
     return round(rsi, 2)
 
+# ==== Supertrend Calculation ====
+def calculate_supertrend(candles, current_index, atr_period=10, factor=3.0):
+    """
+    Calculate Supertrend indicator.
+    Returns: (supertrend_value, direction)
+    direction = -1 for uptrend, 1 for downtrend
+    """
+    if current_index < atr_period:
+        return None, None
+    
+    # Calculate ATR
+    atr_values = []
+    for i in range(current_index - atr_period + 1, current_index + 1):
+        high = float(candles[i][2])
+        low = float(candles[i][3])
+        prev_close = float(candles[i-1][4]) if i > 0 else float(candles[i][1])
+        
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close)
+        )
+        atr_values.append(tr)
+    
+    atr = sum(atr_values) / len(atr_values)
+    
+    # Calculate basic bands
+    high = float(candles[current_index][2])
+    low = float(candles[current_index][3])
+    close = float(candles[current_index][4])
+    hl2 = (high + low) / 2
+    
+    basic_upper = hl2 + (factor * atr)
+    basic_lower = hl2 - (factor * atr)
+    
+    # Initialize or get previous supertrend
+    if current_index == atr_period:
+        # First calculation
+        final_upper = basic_upper
+        final_lower = basic_lower
+        prev_direction = 1
+    else:
+        # Get previous values
+        prev_high = float(candles[current_index-1][2])
+        prev_low = float(candles[current_index-1][3])
+        prev_close = float(candles[current_index-1][4])
+        prev_hl2 = (prev_high + prev_low) / 2
+        
+        # Calculate previous ATR
+        prev_atr_values = []
+        for i in range(current_index - atr_period, current_index):
+            h = float(candles[i][2])
+            l = float(candles[i][3])
+            pc = float(candles[i-1][4]) if i > 0 else float(candles[i][1])
+            tr = max(h - l, abs(h - pc), abs(l - pc))
+            prev_atr_values.append(tr)
+        prev_atr = sum(prev_atr_values) / len(prev_atr_values)
+        
+        prev_basic_upper = prev_hl2 + (factor * prev_atr)
+        prev_basic_lower = prev_hl2 - (factor * prev_atr)
+        
+        # Calculate final bands with trailing logic
+        final_upper = basic_upper if basic_upper < prev_basic_upper or prev_close > prev_basic_upper else prev_basic_upper
+        final_lower = basic_lower if basic_lower > prev_basic_lower or prev_close < prev_basic_lower else prev_basic_lower
+        
+        # Determine direction
+        if prev_close <= prev_basic_upper:
+            prev_direction = 1
+        else:
+            prev_direction = -1
+    
+    # Current direction
+    if close <= final_upper:
+        direction = 1  # Downtrend
+        supertrend = final_upper
+    else:
+        direction = -1  # Uptrend
+        supertrend = final_lower
+    
+    return supertrend, direction
+
 # ==== Binance ====
 def get_usdt_pairs():
     candidates = list(dict.fromkeys([t.upper() + "USDT" for t in CUSTOM_TICKERS]))
@@ -231,13 +312,26 @@ def fetch_pump_candles(symbol, now_utc, start_time):
             else:
                 rsi = None
 
+            # === Calculate Supertrend ===
+            supertrend_value, direction = calculate_supertrend(candles, i)
+            
+            # Check for trend change (previous candle direction vs current)
+            trend_change = None
+            if i > 0 and direction is not None:
+                prev_supertrend_value, prev_direction = calculate_supertrend(candles, i-1)
+                if prev_direction is not None and prev_direction != direction:
+                    if direction == -1:
+                        trend_change = "UP"  # Changed to uptrend
+                    else:
+                        trend_change = "DOWN"  # Changed to downtrend
+
             # === Prices ===
             buy = (open_p + close) / 2
             sell = buy * 1.022
             sl = buy * 0.99
 
             hour = candle_time.strftime("%Y-%m-%d %H:00")
-            results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, vm, rsi, candles_since_last))
+            results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, vm, rsi, candles_since_last, direction, trend_change))
 
         return results
     except Exception as e:
@@ -350,12 +444,25 @@ def fetch_pump_candles_low(symbol, now_utc, start_time):
             else:
                 rsi = None
 
+            # === Calculate Supertrend ===
+            supertrend_value, direction = calculate_supertrend(candles, i)
+            
+            # Check for trend change
+            trend_change = None
+            if i > 0 and direction is not None:
+                prev_supertrend_value, prev_direction = calculate_supertrend(candles, i-1)
+                if prev_direction is not None and prev_direction != direction:
+                    if direction == -1:
+                        trend_change = "UP"
+                    else:
+                        trend_change = "DOWN"
+
             buy = (open_p + close) / 2
             sell = buy * 1.022
             sl = buy * 0.99
 
             hour = candle_time.strftime("%Y-%m-%d %H:00")
-            results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, vm, rsi, candles_since_last))
+            results.append((symbol, pct, close, buy, sell, sl, hour, vol_usdt, vm, rsi, candles_since_last, direction, trend_change))
 
         return results
     except Exception as e:
@@ -369,20 +476,31 @@ def format_report(fresh, duration):
 
     report = f"⏱ Scan: {duration:.2f}s\n\n"
     
+    # Collect trend changes for special alert
+    trend_changes = []
+    
     for h in sorted(grouped):
         items = sorted(grouped[h], key=lambda x: x[7], reverse=True)  # Changed from x[8] (VM) to x[7] (volume)
         
         report += f"  ⏰ {h} UTC\n"
         
-        for s, pct, c, b, se, sl, hour, v, vm, rsi, csince in items:
+        for s, pct, c, b, se, sl, hour, v, vm, rsi, csince, st_direction, trend_change in items:
             sym = s.replace("USDT","")
             rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
             
             # Show candles since last pump with leading zeros
             csince_str = f"{csince:03d}"
             
-            # Build the line
-            line = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(v):4s} {csince_str}"
+            # Supertrend direction indicator
+            if st_direction == -1:
+                st_str = "🟢"  # Uptrend
+            elif st_direction == 1:
+                st_str = "🔴"  # Downtrend
+            else:
+                st_str = "⚪"  # No data
+            
+            # Build the line with Supertrend
+            line = f"{sym:6s} {pct:5.2f} {rsi_str:>4s} {vm:4.1f} {format_volume(v):4s} {csince_str} {st_str}"
             
             # Determine symbol based on RSI and csince
             if rsi:
@@ -399,7 +517,21 @@ def format_report(fresh, duration):
                 symbol = "⚪"  # No RSI data
             
             report += f"{symbol} <code>{line}</code>\n"
+            
+            # Collect trend changes for alert
+            if trend_change:
+                trend_changes.append((sym, trend_change, h))
         
+        report += "\n"
+    
+    # Add trend change alerts at the end if any
+    if trend_changes:
+        report += "🚨 <b>SUPERTREND SIGNALS</b> 🚨\n"
+        for sym, change, hour in trend_changes:
+            if change == "UP":
+                report += f"📈 {sym} → UPTREND at {hour}\n"
+            else:
+                report += f"📉 {sym} → DOWNTREND at {hour}\n"
         report += "\n"
     
     return report
