@@ -211,7 +211,7 @@ def calculate_strength_score_indicator(volume, vol_sma, close, supertrend_line, 
 # ==== Signal Detection ====
 def detect_signals(symbol):
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=100"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=15m&limit=100"
         candles = session.get(url, timeout=5).json()
         if not candles or isinstance(candles, dict) or len(candles) < 30:
             return None
@@ -316,7 +316,7 @@ def detect_signals(symbol):
 # ==== RSI Fetch ====
 def calculate_rsi_for_signal(symbol):
     try:
-        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=25"
+        url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=15m&limit=25"
         candles = session.get(url, timeout=5).json()
         if not candles or len(candles) < 20:
             return None
