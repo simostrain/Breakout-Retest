@@ -17,17 +17,17 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RSI_PERIOD = 14
 reported_signals = set()
 
-# Filters (applied only to breakouts)
+# Filters (only for breakouts)
 MIN_STRENGTH_SCORE = 0
 MIN_CSINCE = 0
 MIN_VOLUME_MULT = 0.0
 
-# SuperTrend+ params
+# SuperTrend+ params (optimized for 15m)
 ATR_PERIOD = 10
-MULTIPLIER = 3.0
+MULTIPLIER = 3      # Reduced from 3.0 for 15m responsiveness
 CLOSE_BARS = 2
 
-# Volume settings (for strength & display)
+# Volume settings
 VOL_LEN = 20
 
 CUSTOM_TICKERS = [
@@ -95,8 +95,8 @@ def calculate_atr_vawma(candles, atr_period):
         atr_vals[i] = atr_val
     return atr_vals
 
-# ==== Supertrend+ (VAWMA + Confirmation) ====
-def calculate_supertrend_vawma(candles, atr_period=10, multiplier=3.0, close_bars=2):
+# ==== Supertrend+ ====
+def calculate_supertrend_vawma(candles, atr_period=10, multiplier=2.5, close_bars=2):
     n = len(candles)
     if n < atr_period + 2:
         return None
@@ -142,7 +142,6 @@ def calculate_supertrend_vawma(candles, atr_period=10, multiplier=3.0, close_bar
             else:
                 trend[i] = prev_trend
 
-    # Apply close_bars confirmation
     confirmed_trend = trend[:]
     for i in range(start_idx + close_bars, n):
         was_down = all(confirmed_trend[i - j] == -1 for j in range(1, close_bars + 1))
@@ -208,7 +207,7 @@ def calculate_strength_score_indicator(volume, vol_sma, close, supertrend_line, 
     strength_score = math.log(vol_ratio + 1) * momentum
     return min(strength_score, 10.0)
 
-# ==== Signal Detection ====
+# ==== Signal Detection (15m) ====
 def detect_signals(symbol):
     try:
         url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=15m&limit=100"
@@ -221,7 +220,7 @@ def detect_signals(symbol):
         prev_candle = candles[last_idx - 1]
 
         candle_time = datetime.fromtimestamp(last_candle[0]/1000, tz=timezone.utc)
-        hour = candle_time.strftime("%Y-%m-%d %H:00")
+        hour = candle_time.strftime("%Y-%m-%d %H:%M")
 
         prev_close = float(prev_candle[4])
         open_p = float(last_candle[1])
@@ -280,7 +279,7 @@ def detect_signals(symbol):
                 'indicator_strength': indicator_strength
             }
 
-        # ==== RETEST (no volume/timing filter) ====
+        # ==== RETEST (no filters) ====
         if trend == 1 and not reversal:
             touched_support = low <= up_band
             held_support = close > up_band
@@ -313,7 +312,7 @@ def detect_signals(symbol):
     except Exception as e:
         return None
 
-# ==== RSI Fetch ====
+# ==== RSI Fetch (15m) ====
 def calculate_rsi_for_signal(symbol):
     try:
         url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=15m&limit=25"
@@ -367,7 +366,7 @@ def send_telegram(msg, max_retries=3):
 # ==== Main Scan ====
 def scan_all_symbols(symbols):
     signal_candidates = []
-    print(f"🔍 Scanning for breakouts and retests...")
+    print(f"🔍 Scanning 15m charts for signals...")
     scan_start = time.time()
 
     with ThreadPoolExecutor(max_workers=100) as ex:
@@ -410,14 +409,14 @@ def scan_all_symbols(symbols):
 
     return final_signals
 
-# ==== Report Formatting ====
+# ==== Report Formatting (Your Exact Request) ====
 def format_signal_report(signals, duration):
     breakouts = signals['breakouts']
     retests = signals['retests']
     if not breakouts and not retests:
         return None
 
-    report = f"🚀 <b>SUPERTREND+ SIGNALS</b> 🚀\n"
+    report = f"🚀 <b>SUPERTREND+ 15m SIGNALS</b> 🚀\n"
     report += f"⏱ Scan: {duration:.2f}s | B: {len(breakouts)} | R: {len(retests)}\n\n"
 
     grouped_b = defaultdict(list)
@@ -452,16 +451,14 @@ def format_signal_report(signals, duration):
     report += "💡 <b>Legend:</b>\n"
     report += "SYMBOL %CHG RSI VMx VolM STRENGTH\n"
     report += "B = Breakout | R = Retest\n"
-    report += "ST = SuperTrend Line with % distance from close\n"
     return report
 
 # ==== Main Loop ====
 def main():
     print("="*80)
-    print("🚀 SUPERSTREND+ SCANNER (FINAL VERSION)")
+    print("🚀 SUPERSTREND+ SCANNER — 15-MINUTE CHARTS")
     print("="*80)
-    print(f"📊 ATR={ATR_PERIOD} | Mult={MULTIPLIER} | Confirm={CLOSE_BARS} bars")
-    print(f"🔄 Retests: ANY pullback with bullish close above ST line")
+    print(f"📊 ATR={ATR_PERIOD} | ST Mult={MULTIPLIER} | Confirm={CLOSE_BARS} bars")
     print("="*80)
 
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -513,10 +510,11 @@ def main():
         else:
             print("\n  ℹ️ No new signals")
 
+        # Sleep until next 15-minute mark
         server_time = get_binance_server_time()
-        next_hour = (server_time // 3600 + 1) * 3600
-        sleep_time = max(60, next_hour - server_time + 5)
-        print(f"\n😴 Sleeping {sleep_time:.0f}s until next hour...")
+        next_interval = (server_time // 900 + 1) * 900  # 900 sec = 15 min
+        sleep_time = max(30, next_interval - server_time + 2)
+        print(f"\n😴 Sleeping {sleep_time:.0f}s until next 15m scan...")
         time.sleep(sleep_time)
 
 if __name__ == "__main__":
