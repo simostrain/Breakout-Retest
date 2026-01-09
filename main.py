@@ -17,7 +17,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RSI_PERIOD = 14
 reported_signals = set()
 
-# Filters (only applied to breakouts)
+# Filters (applied only to breakouts)
 MIN_STRENGTH_SCORE = 0
 MIN_CSINCE = 0
 MIN_VOLUME_MULT = 0.0
@@ -27,7 +27,7 @@ ATR_PERIOD = 10
 MULTIPLIER = 3.0
 CLOSE_BARS = 2
 
-# Volume settings (used for strength score & display only)
+# Volume settings (for strength & display)
 VOL_LEN = 20
 
 CUSTOM_TICKERS = [
@@ -208,7 +208,7 @@ def calculate_strength_score_indicator(volume, vol_sma, close, supertrend_line, 
     strength_score = math.log(vol_ratio + 1) * momentum
     return min(strength_score, 10.0)
 
-# ==== Signal Detection (Breakout + Retest) ====
+# ==== Signal Detection ====
 def detect_signals(symbol):
     try:
         url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=1h&limit=100"
@@ -246,7 +246,6 @@ def detect_signals(symbol):
         trend = st_result['trend'][last_idx]
         reversal = st_result['reversal'][last_idx]
 
-        # Volume SMA (for strength score & VM display only)
         vol_ma_start = max(0, last_idx - VOL_LEN + 1)
         vol_ma_data = [float(candles[j][5]) for j in range(vol_ma_start, last_idx + 1)]
         vol_sma = sum(vol_ma_data) / len(vol_ma_data) if vol_ma_data else volume
@@ -257,7 +256,7 @@ def detect_signals(symbol):
 
         results = {}
 
-        # ==== BREAKOUT: Confirmed reversal ====
+        # ==== BREAKOUT ====
         if reversal and trend == 1:
             csince = 500
             for look_back in range(1, min(499, last_idx)):
@@ -281,14 +280,13 @@ def detect_signals(symbol):
                 'indicator_strength': indicator_strength
             }
 
-        # ==== RETEST: Pullback in uptrend (NO volume or timing filter) ====
+        # ==== RETEST (no volume/timing filter) ====
         if trend == 1 and not reversal:
-            touched_support = low <= up_band          # price touched or below ST line
-            held_support = close > up_band           # closed above it
-            bullish_candle = close > open_p          # green candle
+            touched_support = low <= up_band
+            held_support = close > up_band
+            bullish_candle = close > open_p
 
             if touched_support and held_support and bullish_candle:
-                # Optional: find bars since last breakout (for display only)
                 bars_since_breakout = 0
                 for i in range(last_idx, ATR_PERIOD + CLOSE_BARS - 1, -1):
                     past_st = calculate_supertrend_vawma(candles[:i+1], ATR_PERIOD, MULTIPLIER, CLOSE_BARS)
@@ -296,6 +294,7 @@ def detect_signals(symbol):
                         bars_since_breakout = last_idx - i
                         break
 
+                support_distance = ((close - up_band) / up_band) * 100
                 results['retest'] = {
                     'symbol': symbol,
                     'hour': hour,
@@ -306,7 +305,7 @@ def detect_signals(symbol):
                     'vol_usdt': vol_usdt,
                     'vm': vm,
                     'indicator_strength': indicator_strength,
-                    'support_distance': ((close - up_band) / up_band) * 100
+                    'support_distance': support_distance
                 }
 
         return results if results else None
@@ -405,13 +404,13 @@ def scan_all_symbols(symbols):
                             data['csince'] >= MIN_CSINCE and
                             data['vm'] >= MIN_VOLUME_MULT):
                             final_signals['breakouts'].append(data)
-                    else:  # retest — no filtering
+                    else:
                         final_signals['retests'].append(data)
         print(f"✓ RSI done in {time.time() - rsi_start:.2f}s")
 
     return final_signals
 
-# ==== Report ====
+# ==== Report Formatting ====
 def format_signal_report(signals, duration):
     breakouts = signals['breakouts']
     retests = signals['retests']
@@ -436,29 +435,30 @@ def format_signal_report(signals, duration):
             report += "\n🟢 <b>BREAKOUTS</b>\n"
             for b in items:
                 sym = b['symbol'].replace("USDT", "")
-                line1 = f"{sym:6s} {b['pct']:5.2f}% {b['rsi']:4.1f} {b['vm']:4.1f}x {format_volume(b['vol_usdt']):4s}M {b['csince']:03d} {b['indicator_strength']:5.2f}"
-                line2 = f"       🟢ST: ${b['supertrend_line']:.5f}"
+                st_dist_pct = ((b['close'] - b['supertrend_line']) / b['supertrend_line']) * 100
+                line1 = f"{sym:6s} {b['pct']:5.2f}% {b['rsi']:4.1f} {b['vm']:4.1f}x {format_volume(b['vol_usdt']):4s}M {b['indicator_strength']:5.2f}"
+                line2 = f"       🟢ST: ${b['supertrend_line']:.5f} ({st_dist_pct:+.2f}%)"
                 report += f"<code>{line1}</code>\n<code>{line2}</code>\n"
         if hour in grouped_r:
             items = sorted(grouped_r[hour], key=lambda x: x['indicator_strength'], reverse=True)
             report += "\n🔵 <b>RETESTS</b>\n"
             for r in items:
                 sym = r['symbol'].replace("USDT", "")
-                line1 = f"{sym:6s} {r['pct']:5.2f}% {r['rsi']:4.1f} {r['vm']:4.1f}x {format_volume(r['vol_usdt']):4s}M {r['bars_since_breakout']:02d} {r['indicator_strength']:5.2f}"
-                line2 = f"       🟢ST: ${r['supertrend_line']:.5f} (+{r['support_distance']:.2f}%)"
+                line1 = f"{sym:6s} {r['pct']:5.2f}% {r['rsi']:4.1f} {r['vm']:4.1f}x {format_volume(r['vol_usdt']):4s}M {r['indicator_strength']:5.2f}"
+                line2 = f"       🟢ST: ${r['supertrend_line']:.5f} ({r['support_distance']:+.2f}%)"
                 report += f"<code>{line1}</code>\n<code>{line2}</code>\n"
         report += "\n"
 
     report += "💡 <b>Legend:</b>\n"
-    report += "SYMBOL %CHG RSI VMx VolM CSINCE/BARS STRENGTH\n"
-    report += "B = Breakout (confirmed reversal) | R = Retest (pullback entry)\n"
-    report += "CSINCE = candles since last breakout | BARS = bars since breakout\n"
+    report += "SYMBOL %CHG RSI VMx VolM STRENGTH\n"
+    report += "B = Breakout | R = Retest\n"
+    report += "ST = SuperTrend Line with % distance from close\n"
     return report
 
 # ==== Main Loop ====
 def main():
     print("="*80)
-    print("🚀 SUPERSTREND+ SCANNER (BREAKOUTS + UNFILTERED RETESTS)")
+    print("🚀 SUPERSTREND+ SCANNER (FINAL VERSION)")
     print("="*80)
     print(f"📊 ATR={ATR_PERIOD} | Mult={MULTIPLIER} | Confirm={CLOSE_BARS} bars")
     print(f"🔄 Retests: ANY pullback with bullish close above ST line")
