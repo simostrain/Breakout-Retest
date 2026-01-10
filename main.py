@@ -24,7 +24,7 @@ MIN_VOLUME_MULT = 0.0
 
 # SuperTrend+ params (optimized for 15m)
 ATR_PERIOD = 10
-MULTIPLIER = 3      # Reduced from 3.0 for 15m responsiveness
+MULTIPLIER = 2.5      # Reduced from 3.0 for 15m responsiveness
 CLOSE_BARS = 2
 
 # Volume settings
@@ -279,13 +279,12 @@ def detect_signals(symbol):
                 'indicator_strength': indicator_strength
             }
 
-        # ==== RETEST (no filters) ====
+        # ==== RETEST (NO bullish candle requirement) ====
         if trend == 1 and not reversal:
-            touched_support = low <= up_band
-            held_support = close > up_band
-            bullish_candle = close > open_p
+            touched_support = low <= up_band          # price touched or below ST line
+            held_support = close > up_band           # closed above it
 
-            if touched_support and held_support and bullish_candle:
+            if touched_support and held_support:
                 bars_since_breakout = 0
                 for i in range(last_idx, ATR_PERIOD + CLOSE_BARS - 1, -1):
                     past_st = calculate_supertrend_vawma(candles[:i+1], ATR_PERIOD, MULTIPLIER, CLOSE_BARS)
