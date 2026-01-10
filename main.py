@@ -96,7 +96,7 @@ def calculate_atr_vawma(candles, atr_period):
     return atr_vals
 
 # ==== Supertrend+ ====
-def calculate_supertrend_vawma(candles, atr_period=10, multiplier=2.5, close_bars=2):
+def calculate_supertrend_vawma(candles, atr_period=10, multiplier=3, close_bars=2):
     n = len(candles)
     if n < atr_period + 2:
         return None
