@@ -24,7 +24,7 @@ MIN_VOLUME_MULT = 0.0
 
 # SuperTrend+ params (optimized for 15m)
 ATR_PERIOD = 10
-MULTIPLIER = 2.5      # Reduced from 3.0 for 15m responsiveness
+MULTIPLIER = 3      # Reduced from 3.0 for 15m responsiveness
 CLOSE_BARS = 2
 
 # Volume settings
