@@ -48,7 +48,7 @@ CUSTOM_TICKERS = [
     "SOMI","W","WAL","XPL","ZBT","ZKC","BREV","ZKP"
 ]
 
-LOG_FILE = Path("/tmp/supertrend_standard_log.json")
+LOG_FILE = Path("/tmp/supertrend_patterns_log.json")
 
 session = requests.Session()
 adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=2)
@@ -135,6 +135,65 @@ def calculate_supertrend_standard(candles, atr_period=10, multiplier=3.0):
         'dn': dn,
         'atr': atr_vals
     }
+
+# ==== BULLISH REVERSAL PATTERNS ====
+def is_bullish_engulfing(candles, idx):
+    if idx < 1:
+        return False
+    c1 = candles[idx-1]  # prior candle
+    c2 = candles[idx]    # current candle
+    o1, c1 = float(c1[1]), float(c1[4])
+    o2, c2 = float(c2[1]), float(c2[4])
+    return (c1 < o1) and (c2 > o2) and (o2 < c1) and (c2 > o1)
+
+def is_hammer(candles, idx):
+    c = candles[idx]
+    o, h, l, cl = float(c[1]), float(c[2]), float(c[3]), float(c[4])
+    body = abs(cl - o)
+    if body == 0:
+        return False
+    lower_wick = o - l if cl >= o else cl - l
+    upper_wick = h - cl if cl >= o else h - o
+    return (lower_wick >= 2 * body) and (upper_wick <= body) and (cl > (h + l) / 2)
+
+def is_piercing_line(candles, idx):
+    if idx < 1:
+        return False
+    c1 = candles[idx-1]
+    c2 = candles[idx]
+    o1, c1 = float(c1[1]), float(c1[4])
+    o2, c2 = float(c2[1]), float(c2[4])
+    return (c1 < o1) and (c2 > o2) and (c2 > (o1 + c1) / 2)
+
+def is_bullish_pin_bar(candles, idx):
+    c = candles[idx]
+    o, h, l, cl = float(c[1]), float(c[2]), float(c[3]), float(c[4])
+    body = abs(cl - o)
+    if body == 0:
+        return False
+    lower_wick = min(o, cl) - l
+    upper_wick = h - max(o, cl)
+    return (lower_wick >= 2 * body) and (upper_wick <= body) and (cl > o) and (cl > (h + l) / 2)
+
+def has_bullish_reversal_pattern(candles, idx, support_line):
+    """Check if any bullish pattern occurs at support zone (±0.5%)"""
+    support_buffer = support_line * 0.005  # ±0.5%
+    low = float(candles[idx][3])
+    
+    # Pattern must touch support zone
+    if low > support_line + support_buffer:
+        return None
+        
+    # Check patterns in order of reliability
+    if is_bullish_engulfing(candles, idx):
+        return "Bullish Engulfing"
+    if is_piercing_line(candles, idx):
+        return "Piercing Line"
+    if is_hammer(candles, idx):
+        return "Hammer"
+    if is_bullish_pin_bar(candles, idx):
+        return "Bullish Pin Bar"
+    return None
 
 # ==== RSI ====
 def calculate_rsi(closes, period=14):
@@ -248,32 +307,35 @@ def detect_signals(symbol):
                 'indicator_strength': indicator_strength
             }
 
-        # ==== RETEST: Pullback in uptrend ====
+        # ==== RETEST: Pullback with bullish reversal pattern ====
         if direction == 1 and not (prev_direction == -1 and direction == 1):
             touched_support = low <= up_band
             held_support = close > up_band
 
             if touched_support and held_support:
-                bars_since_breakout = 0
-                for i in range(last_idx, ATR_PERIOD - 1, -1):
-                    past_st = calculate_supertrend_standard(candles[:i+1], ATR_PERIOD, MULTIPLIER)
-                    if past_st and past_st['direction'][i] == 1 and (i == ATR_PERIOD or past_st['direction'][i-1] == -1):
-                        bars_since_breakout = last_idx - i
-                        break
+                pattern_name = has_bullish_reversal_pattern(candles, last_idx, up_band)
+                if pattern_name:
+                    bars_since_breakout = 0
+                    for i in range(last_idx, ATR_PERIOD - 1, -1):
+                        past_st = calculate_supertrend_standard(candles[:i+1], ATR_PERIOD, MULTIPLIER)
+                        if past_st and past_st['direction'][i] == 1 and (i == ATR_PERIOD or past_st['direction'][i-1] == -1):
+                            bars_since_breakout = last_idx - i
+                            break
 
-                support_distance = ((close - up_band) / up_band) * 100
-                results['retest'] = {
-                    'symbol': symbol,
-                    'hour': hour,
-                    'pct': pct,
-                    'close': close,
-                    'supertrend_line': up_band,
-                    'bars_since_breakout': bars_since_breakout,
-                    'vol_usdt': vol_usdt,
-                    'vm': vm,
-                    'indicator_strength': indicator_strength,
-                    'support_distance': support_distance
-                }
+                    support_distance = ((close - up_band) / up_band) * 100
+                    results['retest'] = {
+                        'symbol': symbol,
+                        'hour': hour,
+                        'pct': pct,
+                        'close': close,
+                        'supertrend_line': up_band,
+                        'bars_since_breakout': bars_since_breakout,
+                        'vol_usdt': vol_usdt,
+                        'vm': vm,
+                        'indicator_strength': indicator_strength,
+                        'support_distance': support_distance,
+                        'pattern': pattern_name
+                    }
 
         return results if results else None
 
@@ -334,7 +396,7 @@ def send_telegram(msg, max_retries=3):
 # ==== Main Scan ====
 def scan_all_symbols(symbols):
     signal_candidates = []
-    print(f"🔍 Scanning 15m charts for standard SuperTrend signals...")
+    print(f"🔍 Scanning 15m charts for SuperTrend + patterns...")
     scan_start = time.time()
 
     with ThreadPoolExecutor(max_workers=100) as ex:
@@ -384,7 +446,7 @@ def format_signal_report(signals, duration):
     if not breakouts and not retests:
         return None
 
-    report = f"🚀 <b>STANDARD SUPERTREND SIGNALS</b> 🚀\n"
+    report = f"🚀 <b>SUPERTREND + PATTERNS</b> 🚀\n"
     report += f"⏱ Scan: {duration:.2f}s | B: {len(breakouts)} | R: {len(retests)}\n\n"
 
     grouped_b = defaultdict(list)
@@ -413,7 +475,8 @@ def format_signal_report(signals, duration):
                 sym = r['symbol'].replace("USDT", "")
                 line1 = f"{sym:6s} {r['pct']:5.2f}% {r['rsi']:4.1f} {r['vm']:4.1f}x {format_volume(r['vol_usdt']):4s}M {r['indicator_strength']:5.2f}"
                 line2 = f"       🟢ST: ${r['supertrend_line']:.5f} ({r['support_distance']:+.2f}%)"
-                report += f"<code>{line1}</code>\n<code>{line2}</code>\n"
+                line3 = f"       🕯️ Pattern: {r['pattern']}"
+                report += f"<code>{line1}</code>\n<code>{line2}</code>\n<code>{line3}</code>\n"
         report += "\n"
 
     report += "💡 <b>Legend:</b>\n"
@@ -424,10 +487,10 @@ def format_signal_report(signals, duration):
 # ==== Main Loop ====
 def main():
     print("="*80)
-    print("🚀 STANDARD SUPERTREND SCANNER (Pine v6 Logic)")
+    print("🚀 SUPERTREND + BULLISH REVERSAL PATTERNS")
     print("="*80)
     print(f"📊 ATR={ATR_PERIOD} | Multiplier={MULTIPLIER}")
-    print(f"📈 Uses standard ta.supertrend() from TradingView")
+    print(f"🕯️  Retests require: Bullish Engulfing, Hammer, Piercing Line, or Pin Bar")
     print("="*80)
 
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
