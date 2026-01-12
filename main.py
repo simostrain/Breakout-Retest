@@ -22,10 +22,9 @@ MIN_STRENGTH_SCORE = 0
 MIN_CSINCE = 0
 MIN_VOLUME_MULT = 0.0
 
-# SuperTrend+ params (optimized for 15m)
+# Standard SuperTrend params (Pine v6)
 ATR_PERIOD = 10
-MULTIPLIER = 3      # Reduced from 3.0 for 15m responsiveness
-CLOSE_BARS = 2
+MULTIPLIER = 3.0
 
 # Volume settings
 VOL_LEN = 20
@@ -49,7 +48,7 @@ CUSTOM_TICKERS = [
     "SOMI","W","WAL","XPL","ZBT","ZKC","BREV","ZKP"
 ]
 
-LOG_FILE = Path("/tmp/signal_log.json")
+LOG_FILE = Path("/tmp/supertrend_standard_log.json")
 
 session = requests.Session()
 adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=2)
@@ -64,106 +63,76 @@ def get_binance_server_time():
     except:
         return time.time()
 
-# ==== VAWMA & ATR ====
-def vawma(values, volumes, period):
-    if len(values) < period or len(volumes) < period:
+# ==== Standard ATR (SMA) ====
+def calculate_atr_sma(candles, period):
+    if len(candles) < period + 1:
         return None
-    weighted_sum = sum(v * vol for v, vol in zip(values[-period:], volumes[-period:]))
-    volume_sum = sum(volumes[-period:])
-    return weighted_sum / volume_sum if volume_sum > 0 else values[-1]
-
-def calculate_atr_vawma(candles, atr_period):
-    if len(candles) < atr_period + 1:
-        return None
-    tr_list = []
+    trs = []
     for i in range(1, len(candles)):
         h = float(candles[i][2])
         l = float(candles[i][3])
         c_prev = float(candles[i-1][4])
         tr = max(h - l, abs(h - c_prev), abs(l - c_prev))
-        tr_list.append(tr)
+        trs.append(tr)
     
     atr_vals = [None] * len(candles)
-    initial_trs = tr_list[:atr_period]
-    if not initial_trs:
-        return None
-    atr_vals[atr_period] = sum(initial_trs) / len(initial_trs)
-
-    volumes = [float(c[5]) for c in candles[1:]]
-    for i in range(atr_period + 1, len(candles)):
-        atr_val = vawma(tr_list[:i], volumes[:i], atr_period)
-        atr_vals[i] = atr_val
+    atr_vals[period] = sum(trs[:period]) / period
+    for i in range(period + 1, len(candles)):
+        atr_vals[i] = (atr_vals[i-1] * (period - 1) + trs[i-1]) / period
     return atr_vals
 
-# ==== Supertrend+ ====
-def calculate_supertrend_vawma(candles, atr_period=10, multiplier=3, close_bars=2):
+# ==== Standard SuperTrend (Pine v6 logic) ====
+def calculate_supertrend_standard(candles, atr_period=10, multiplier=3.0):
     n = len(candles)
-    if n < atr_period + 2:
+    if n < atr_period + 1:
         return None
 
-    atr_vals = calculate_atr_vawma(candles, atr_period)
+    atr_vals = calculate_atr_sma(candles, atr_period)
     if atr_vals is None:
         return None
 
-    highs = [float(c[2]) for c in candles]
-    lows = [float(c[3]) for c in candles]
-    closes = [float(c[4]) for c in candles]
-
     up = [0.0] * n
     dn = [0.0] * n
-    trend = [1] * n
-    reversal = [False] * n
+    direction = [1] * n  # 1 = uptrend, -1 = downtrend
 
-    start_idx = atr_period
-    for i in range(start_idx, n):
-        src = (highs[i] + lows[i]) / 2.0
-        atr = atr_vals[i] or 0.0
+    for i in range(atr_period, n):
+        high = float(candles[i][2])
+        low = float(candles[i][3])
+        src = (high + low) / 2.0
+        atr = atr_vals[i]
+        
         basic_upper = src - multiplier * atr
         basic_lower = src + multiplier * atr
 
-        if i == start_idx:
+        if i == atr_period:
             up[i] = basic_upper
             dn[i] = basic_lower
-            trend[i] = 1
         else:
-            if closes[i - 1] > up[i - 1]:
-                up[i] = max(basic_upper, up[i - 1])
+            # Upper band
+            if direction[i-1] == 1:
+                up[i] = max(basic_upper, up[i-1])
             else:
                 up[i] = basic_upper
-            if closes[i - 1] < dn[i - 1]:
-                dn[i] = min(basic_lower, dn[i - 1])
+            # Lower band
+            if direction[i-1] == -1:
+                dn[i] = min(basic_lower, dn[i-1])
             else:
                 dn[i] = basic_lower
-            prev_trend = trend[i - 1]
-            if prev_trend == -1 and closes[i] > dn[i - 1]:
-                trend[i] = 1
-            elif prev_trend == 1 and closes[i] < up[i - 1]:
-                trend[i] = -1
-            else:
-                trend[i] = prev_trend
 
-    confirmed_trend = trend[:]
-    for i in range(start_idx + close_bars, n):
-        was_down = all(confirmed_trend[i - j] == -1 for j in range(1, close_bars + 1))
-        now_up = confirmed_trend[i] == 1
-        if was_down and now_up:
-            valid = True
-            for j in range(close_bars):
-                idx = i - j
-                if closes[idx] <= dn[idx - 1]:
-                    valid = False
-                    break
-            if valid:
-                reversal[i] = True
-            else:
-                for k in range(i - close_bars + 1, i + 1):
-                    confirmed_trend[k] = -1
+        close = float(candles[i][4])
+        if close > dn[i-1]:
+            direction[i] = 1
+        elif close < up[i-1]:
+            direction[i] = -1
+        else:
+            direction[i] = direction[i-1]
 
+    supertrend = [up[i] if direction[i] == 1 else dn[i] for i in range(n)]
     return {
-        'trend': confirmed_trend,
+        'supertrend': supertrend,
+        'direction': direction,
         'up': up,
         'dn': dn,
-        'reversal': reversal,
         'atr': atr_vals
     }
 
@@ -207,7 +176,7 @@ def calculate_strength_score_indicator(volume, vol_sma, close, supertrend_line, 
     strength_score = math.log(vol_ratio + 1) * momentum
     return min(strength_score, 10.0)
 
-# ==== Signal Detection (15m) ====
+# ==== Signal Detection ====
 def detect_signals(symbol):
     try:
         url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=15m&limit=100"
@@ -231,39 +200,39 @@ def detect_signals(symbol):
         vol_usdt = open_p * volume
         pct = ((close - prev_close) / prev_close) * 100
 
-        st_result = calculate_supertrend_vawma(
+        st_result = calculate_supertrend_standard(
             candles[:last_idx+1],
             atr_period=ATR_PERIOD,
-            multiplier=MULTIPLIER,
-            close_bars=CLOSE_BARS
+            multiplier=MULTIPLIER
         )
         if not st_result:
             return None
 
         atr = st_result['atr'][last_idx] or 1e-8
         up_band = st_result['up'][last_idx]
-        trend = st_result['trend'][last_idx]
-        reversal = st_result['reversal'][last_idx]
+        dn_band = st_result['dn'][last_idx]
+        direction = st_result['direction'][last_idx]
+        prev_direction = st_result['direction'][last_idx - 1]
 
         vol_ma_start = max(0, last_idx - VOL_LEN + 1)
         vol_ma_data = [float(candles[j][5]) for j in range(vol_ma_start, last_idx + 1)]
         vol_sma = sum(vol_ma_data) / len(vol_ma_data) if vol_ma_data else volume
         vm = volume / vol_sma if vol_sma > 0 else 1.0
 
-        supertrend_line = up_band if trend == 1 else st_result['dn'][last_idx]
+        supertrend_line = up_band if direction == 1 else dn_band
         indicator_strength = calculate_strength_score_indicator(volume, vol_sma, close, supertrend_line, atr)
 
         results = {}
 
-        # ==== BREAKOUT ====
-        if reversal and trend == 1:
+        # ==== BREAKOUT: Trend flip (downtrend → uptrend) ====
+        if prev_direction == -1 and direction == 1:
             csince = 500
             for look_back in range(1, min(499, last_idx)):
                 idx = last_idx - look_back
-                if idx < ATR_PERIOD + CLOSE_BARS:
+                if idx < ATR_PERIOD:
                     break
-                past_st = calculate_supertrend_vawma(candles[:idx+1], ATR_PERIOD, MULTIPLIER, CLOSE_BARS)
-                if past_st and past_st['reversal'][idx]:
+                past_st = calculate_supertrend_standard(candles[:idx+1], ATR_PERIOD, MULTIPLIER)
+                if past_st and past_st['direction'][idx] == 1 and (idx == ATR_PERIOD or past_st['direction'][idx-1] == -1):
                     csince = look_back
                     break
 
@@ -279,16 +248,16 @@ def detect_signals(symbol):
                 'indicator_strength': indicator_strength
             }
 
-        # ==== RETEST (NO bullish candle requirement) ====
-        if trend == 1 and not reversal:
-            touched_support = low <= up_band          # price touched or below ST line
-            held_support = close > up_band           # closed above it
+        # ==== RETEST: Pullback in uptrend ====
+        if direction == 1 and not (prev_direction == -1 and direction == 1):
+            touched_support = low <= up_band
+            held_support = close > up_band
 
             if touched_support and held_support:
                 bars_since_breakout = 0
-                for i in range(last_idx, ATR_PERIOD + CLOSE_BARS - 1, -1):
-                    past_st = calculate_supertrend_vawma(candles[:i+1], ATR_PERIOD, MULTIPLIER, CLOSE_BARS)
-                    if past_st and past_st['reversal'][i]:
+                for i in range(last_idx, ATR_PERIOD - 1, -1):
+                    past_st = calculate_supertrend_standard(candles[:i+1], ATR_PERIOD, MULTIPLIER)
+                    if past_st and past_st['direction'][i] == 1 and (i == ATR_PERIOD or past_st['direction'][i-1] == -1):
                         bars_since_breakout = last_idx - i
                         break
 
@@ -311,7 +280,7 @@ def detect_signals(symbol):
     except Exception as e:
         return None
 
-# ==== RSI Fetch (15m) ====
+# ==== RSI Fetch ====
 def calculate_rsi_for_signal(symbol):
     try:
         url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=15m&limit=25"
@@ -365,7 +334,7 @@ def send_telegram(msg, max_retries=3):
 # ==== Main Scan ====
 def scan_all_symbols(symbols):
     signal_candidates = []
-    print(f"🔍 Scanning 15m charts for signals...")
+    print(f"🔍 Scanning 15m charts for standard SuperTrend signals...")
     scan_start = time.time()
 
     with ThreadPoolExecutor(max_workers=100) as ex:
@@ -408,14 +377,14 @@ def scan_all_symbols(symbols):
 
     return final_signals
 
-# ==== Report Formatting (Your Exact Request) ====
+# ==== Report Formatting ====
 def format_signal_report(signals, duration):
     breakouts = signals['breakouts']
     retests = signals['retests']
     if not breakouts and not retests:
         return None
 
-    report = f"🚀 <b>SUPERTREND+ 15m SIGNALS</b> 🚀\n"
+    report = f"🚀 <b>STANDARD SUPERTREND SIGNALS</b> 🚀\n"
     report += f"⏱ Scan: {duration:.2f}s | B: {len(breakouts)} | R: {len(retests)}\n\n"
 
     grouped_b = defaultdict(list)
@@ -455,9 +424,10 @@ def format_signal_report(signals, duration):
 # ==== Main Loop ====
 def main():
     print("="*80)
-    print("🚀 SUPERSTREND+ SCANNER — 15-MINUTE CHARTS")
+    print("🚀 STANDARD SUPERTREND SCANNER (Pine v6 Logic)")
     print("="*80)
-    print(f"📊 ATR={ATR_PERIOD} | ST Mult={MULTIPLIER} | Confirm={CLOSE_BARS} bars")
+    print(f"📊 ATR={ATR_PERIOD} | Multiplier={MULTIPLIER}")
+    print(f"📈 Uses standard ta.supertrend() from TradingView")
     print("="*80)
 
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -509,9 +479,8 @@ def main():
         else:
             print("\n  ℹ️ No new signals")
 
-        # Sleep until next 15-minute mark
         server_time = get_binance_server_time()
-        next_interval = (server_time // 900 + 1) * 900  # 900 sec = 15 min
+        next_interval = (server_time // 900 + 1) * 900
         sleep_time = max(30, next_interval - server_time + 2)
         print(f"\n😴 Sleeping {sleep_time:.0f}s until next 15m scan...")
         time.sleep(sleep_time)
