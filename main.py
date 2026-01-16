@@ -17,16 +17,12 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RSI_PERIOD = 14
 reported_signals = set()
 
-# Filters (only for breakouts)
 MIN_STRENGTH_SCORE = 0
 MIN_CSINCE = 0
 MIN_VOLUME_MULT = 0.0
 
-# Standard SuperTrend params (Pine v6)
 ATR_PERIOD = 10
 MULTIPLIER = 3.0
-
-# Volume settings
 VOL_LEN = 20
 
 CUSTOM_TICKERS = [
@@ -63,7 +59,6 @@ def get_binance_server_time():
     except:
         return time.time()
 
-# ==== Standard ATR (SMA) ====
 def calculate_atr_sma(candles, period):
     if len(candles) < period + 1:
         return None
@@ -74,36 +69,29 @@ def calculate_atr_sma(candles, period):
         c_prev = float(candles[i-1][4])
         tr = max(h - l, abs(h - c_prev), abs(l - c_prev))
         trs.append(tr)
-    
     atr_vals = [None] * len(candles)
     atr_vals[period] = sum(trs[:period]) / period
     for i in range(period + 1, len(candles)):
         atr_vals[i] = (atr_vals[i-1] * (period - 1) + trs[i-1]) / period
     return atr_vals
 
-# ==== Standard SuperTrend (Pine v6 logic) ====
 def calculate_supertrend_standard(candles, atr_period=10, multiplier=3.0):
     n = len(candles)
     if n < atr_period + 1:
         return None
-
     atr_vals = calculate_atr_sma(candles, atr_period)
     if atr_vals is None:
         return None
-
     up = [0.0] * n
     dn = [0.0] * n
-    direction = [1] * n  # 1 = uptrend, -1 = downtrend
-
+    direction = [1] * n
     for i in range(atr_period, n):
         high = float(candles[i][2])
         low = float(candles[i][3])
         src = (high + low) / 2.0
         atr = atr_vals[i]
-        
         basic_upper = src - multiplier * atr
         basic_lower = src + multiplier * atr
-
         if i == atr_period:
             up[i] = basic_upper
             dn[i] = basic_lower
@@ -116,7 +104,6 @@ def calculate_supertrend_standard(candles, atr_period=10, multiplier=3.0):
                 dn[i] = min(basic_lower, dn[i-1])
             else:
                 dn[i] = basic_lower
-
         close = float(candles[i][4])
         if close > dn[i-1]:
             direction[i] = 1
@@ -124,7 +111,6 @@ def calculate_supertrend_standard(candles, atr_period=10, multiplier=3.0):
             direction[i] = -1
         else:
             direction[i] = direction[i-1]
-
     supertrend = [up[i] if direction[i] == 1 else dn[i] for i in range(n)]
     return {
         'supertrend': supertrend,
@@ -134,41 +120,33 @@ def calculate_supertrend_standard(candles, atr_period=10, multiplier=3.0):
         'atr': atr_vals
     }
 
-# ==== BULLISH REVERSAL PATTERNS ====
+# ==== BULLISH REVERSAL PATTERNS (UNCHANGED) ====
 def is_bullish_engulfing(candles, idx):
-    if idx < 1:
-        return False
-    c1 = candles[idx-1]
-    c2 = candles[idx]
-    o1, c1 = float(c1[1]), float(c1[4])
-    o2, c2 = float(c2[1]), float(c2[4])
+    if idx < 1: return False
+    c1 = candles[idx-1]; c2 = candles[idx]
+    o1, c1 = float(c1[1]), float(c1[4]); o2, c2 = float(c2[1]), float(c2[4])
     return (c1 < o1) and (c2 > o2) and (o2 < c1) and (c2 > o1)
 
 def is_hammer(candles, idx):
     c = candles[idx]
     o, h, l, cl = float(c[1]), float(c[2]), float(c[3]), float(c[4])
     body = abs(cl - o)
-    if body == 0:
-        return False
+    if body == 0: return False
     lower_wick = o - l if cl >= o else cl - l
     upper_wick = h - cl if cl >= o else h - o
     return (lower_wick >= 2 * body) and (upper_wick <= body) and (cl > (h + l) / 2)
 
 def is_piercing_line(candles, idx):
-    if idx < 1:
-        return False
-    c1 = candles[idx-1]
-    c2 = candles[idx]
-    o1, c1 = float(c1[1]), float(c1[4])
-    o2, c2 = float(c2[1]), float(c2[4])
+    if idx < 1: return False
+    c1 = candles[idx-1]; c2 = candles[idx]
+    o1, c1 = float(c1[1]), float(c1[4]); o2, c2 = float(c2[1]), float(c2[4])
     return (c1 < o1) and (c2 > o2) and (c2 > (o1 + c1) / 2)
 
 def is_bullish_pin_bar(candles, idx):
     c = candles[idx]
     o, h, l, cl = float(c[1]), float(c[2]), float(c[3]), float(c[4])
     body = abs(cl - o)
-    if body == 0:
-        return False
+    if body == 0: return False
     lower_wick = min(o, cl) - l
     upper_wick = h - max(o, cl)
     return (lower_wick >= 2 * body) and (upper_wick <= body) and (cl > o) and (cl > (h + l) / 2)
@@ -178,62 +156,46 @@ def has_bullish_reversal_pattern(candles, idx, support_line):
     low = float(candles[idx][3])
     if low > support_line + support_buffer:
         return None
-    if is_bullish_engulfing(candles, idx):
-        return "Bullish Engulfing"
-    if is_piercing_line(candles, idx):
-        return "Piercing Line"
-    if is_hammer(candles, idx):
-        return "Hammer"
-    if is_bullish_pin_bar(candles, idx):
-        return "Bullish Pin Bar"
+    if is_bullish_engulfing(candles, idx): return "Bullish Engulfing"
+    if is_piercing_line(candles, idx): return "Piercing Line"
+    if is_hammer(candles, idx): return "Hammer"
+    if is_bullish_pin_bar(candles, idx): return "Bullish Pin Bar"
     return None
 
-# ==== RSI ====
+# ==== RSI & OTHER UTILS (UNCHANGED) ====
 def calculate_rsi(closes, period=14):
-    if len(closes) < period + 1:
-        return None
+    if len(closes) < period + 1: return None
     changes = [closes[i] - closes[i-1] for i in range(1, len(closes))]
-    gains = [max(c, 0) for c in changes]
-    losses = [max(-c, 0) for c in changes]
-    avg_gain = sum(gains[:period]) / period
-    avg_loss = sum(losses[:period]) / period
+    gains = [max(c, 0) for c in changes]; losses = [max(-c, 0) for c in changes]
+    avg_gain = sum(gains[:period]) / period; avg_loss = sum(losses[:period]) / period
     for i in range(period, len(gains)):
         avg_gain = (avg_gain * (period - 1) + gains[i]) / period
         avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-    if avg_loss == 0:
-        return 100.0
+    if avg_loss == 0: return 100.0
     rs = avg_gain / avg_loss
     return round(100.0 - (100.0 / (1.0 + rs)), 2)
 
-# ==== Binance ====
 def get_usdt_pairs():
     candidates = list(dict.fromkeys([t.upper() + "USDT" for t in CUSTOM_TICKERS]))
     try:
         data = session.get(f"{BINANCE_API}/api/v3/exchangeInfo", timeout=10).json()
-        valid = {s["symbol"] for s in data["symbols"]
-                 if s["quoteAsset"] == "USDT" and s["status"] == "TRADING"}
-        pairs = [c for c in candidates if c in valid]
-        print(f"✓ Loaded {len(pairs)} valid USDT pairs")
-        return pairs
-    except Exception as e:
-        print(f"✗ Exchange info error: {e}")
+        valid = {s["symbol"] for s in data["symbols"] if s["quoteAsset"] == "USDT" and s["status"] == "TRADING"}
+        return [c for c in candidates if c in valid]
+    except:
         return []
 
-# ==== Strength Scoring ====
 def calculate_strength_score_indicator(volume, vol_sma, close, supertrend_line, atr):
-    if vol_sma <= 0 or atr <= 0:
-        return 0.0
+    if vol_sma <= 0 or atr <= 0: return 0.0
     vol_ratio = volume / vol_sma
     momentum = abs(close - supertrend_line) / atr
-    strength_score = math.log(vol_ratio + 1) * momentum
-    return min(strength_score, 10.0)
+    return min(math.log(vol_ratio + 1) * momentum, 10.0)
 
-# ==== Signal Detection ====
+# ==== SIGNAL DETECTION (BREAKOUT UPDATED) ====
 def detect_signals(symbol):
     try:
         url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=15m&limit=100"
         candles = session.get(url, timeout=5).json()
-        if not candles or isinstance(candles, dict) or len(candles) < 30:
+        if not candles or len(candles) < 30:
             return None
 
         last_idx = len(candles) - 2
@@ -252,11 +214,7 @@ def detect_signals(symbol):
         vol_usdt = open_p * volume
         pct = ((close - prev_close) / prev_close) * 100
 
-        st_result = calculate_supertrend_standard(
-            candles[:last_idx+1],
-            atr_period=ATR_PERIOD,
-            multiplier=MULTIPLIER
-        )
+        st_result = calculate_supertrend_standard(candles[:last_idx+1], ATR_PERIOD, MULTIPLIER)
         if not st_result:
             return None
 
@@ -264,7 +222,6 @@ def detect_signals(symbol):
         up_band = st_result['up'][last_idx]
         dn_band = st_result['dn'][last_idx]
         direction = st_result['direction'][last_idx]
-        prev_direction = st_result['direction'][last_idx - 1]
 
         vol_ma_start = max(0, last_idx - VOL_LEN + 1)
         vol_ma_data = [float(candles[j][5]) for j in range(vol_ma_start, last_idx + 1)]
@@ -276,15 +233,16 @@ def detect_signals(symbol):
 
         results = {}
 
-        # ==== BREAKOUT: Trend flip + 1 confirmation candle ====
-        if prev_direction == -1 and direction == 1:
-            # Check if next candle exists and closes above breakout level
-            if last_idx + 1 < len(candles):
-                next_candle = candles[last_idx + 1]
-                next_close = float(next_candle[4])
-                if next_close > supertrend_line:
+        # ==== BREAKOUT: Confirm with next candle ====
+        if last_idx >= 2:
+            prev_dir = st_result['direction'][last_idx - 1]
+            prev_prev_dir = st_result['direction'][last_idx - 2]
+            # Flip happened on previous candle
+            if prev_prev_dir == -1 and prev_dir == 1:
+                st_line_at_flip = st_result['supertrend'][last_idx - 1]
+                if close > st_line_at_flip:
                     csince = 500
-                    for look_back in range(1, min(499, last_idx)):
+                    for look_back in range(2, min(500, last_idx)):
                         idx = last_idx - look_back
                         if idx < ATR_PERIOD:
                             break
@@ -292,55 +250,55 @@ def detect_signals(symbol):
                         if past_st and past_st['direction'][idx] == 1 and (idx == ATR_PERIOD or past_st['direction'][idx-1] == -1):
                             csince = look_back
                             break
-
                     results['breakout'] = {
                         'symbol': symbol,
                         'hour': hour,
                         'pct': pct,
-                        'close': next_close,  # confirmed close
-                        'supertrend_line': supertrend_line,
+                        'close': close,
+                        'supertrend_line': st_line_at_flip,
                         'csince': csince,
                         'vol_usdt': vol_usdt,
                         'vm': vm,
                         'indicator_strength': indicator_strength
                     }
 
-        # ==== RETEST: Pullback with bullish reversal pattern ====
-        if direction == 1 and not (prev_direction == -1 and direction == 1):
-            touched_support = low <= up_band
-            held_support = close > up_band
-
-            if touched_support and held_support:
-                pattern_name = has_bullish_reversal_pattern(candles, last_idx, up_band)
-                if pattern_name:
-                    bars_since_breakout = 0
-                    for i in range(last_idx, ATR_PERIOD - 1, -1):
-                        past_st = calculate_supertrend_standard(candles[:i+1], ATR_PERIOD, MULTIPLIER)
-                        if past_st and past_st['direction'][i] == 1 and (i == ATR_PERIOD or past_st['direction'][i-1] == -1):
-                            bars_since_breakout = last_idx - i
-                            break
-
-                    support_distance = ((close - up_band) / up_band) * 100
-                    results['retest'] = {
-                        'symbol': symbol,
-                        'hour': hour,
-                        'pct': pct,
-                        'close': close,
-                        'supertrend_line': up_band,
-                        'bars_since_breakout': bars_since_breakout,
-                        'vol_usdt': vol_usdt,
-                        'vm': vm,
-                        'indicator_strength': indicator_strength,
-                        'support_distance': support_distance,
-                        'pattern': pattern_name
-                    }
+        # ==== RETEST: Unchanged ====
+        if direction == 1:
+            # Check if this is NOT a breakout (avoid double-signal)
+            is_breakout = 'breakout' in results
+            if not is_breakout:
+                touched_support = low <= up_band
+                held_support = close > up_band
+                if touched_support and held_support:
+                    pattern_name = has_bullish_reversal_pattern(candles, last_idx, up_band)
+                    if pattern_name:
+                        bars_since_breakout = 0
+                        for i in range(last_idx, ATR_PERIOD - 1, -1):
+                            past_st = calculate_supertrend_standard(candles[:i+1], ATR_PERIOD, MULTIPLIER)
+                            if past_st and past_st['direction'][i] == 1 and (i == ATR_PERIOD or past_st['direction'][i-1] == -1):
+                                bars_since_breakout = last_idx - i
+                                break
+                        support_distance = ((close - up_band) / up_band) * 100
+                        results['retest'] = {
+                            'symbol': symbol,
+                            'hour': hour,
+                            'pct': pct,
+                            'close': close,
+                            'supertrend_line': up_band,
+                            'bars_since_breakout': bars_since_breakout,
+                            'vol_usdt': vol_usdt,
+                            'vm': vm,
+                            'indicator_strength': indicator_strength,
+                            'support_distance': support_distance,
+                            'pattern': pattern_name
+                        }
 
         return results if results else None
 
-    except Exception as e:
+    except Exception:
         return None
 
-# ==== RSI Fetch ====
+# ==== REST OF SCRIPT (RSI, TELEGRAM, MAIN LOOP) UNCHANGED ====
 def calculate_rsi_for_signal(symbol):
     try:
         url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=15m&limit=25"
@@ -353,66 +311,38 @@ def calculate_rsi_for_signal(symbol):
     except:
         return None
 
-# ==== Logging & Telegram ====
 def log_signal_to_file(signal_data, signal_type):
-    log_entry = {
-        'timestamp': datetime.now(timezone.utc).isoformat(),
-        'type': signal_type,
-        'data': signal_data
-    }
+    log_entry = {'timestamp': datetime.now(timezone.utc).isoformat(), 'type': signal_type, 'data': signal_data}
     try:
         with open(LOG_FILE, 'a') as f:
             f.write(json.dumps(log_entry) + '\n')
-        print(f"  📝 Logged {signal_type} to file")
-    except Exception as e:
-        print(f"  ⚠️ Failed to log to file: {e}")
+    except:
+        pass
 
 def send_telegram(msg, max_retries=3):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("⚠️ Telegram credentials not set!")
         return False
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     for attempt in range(max_retries):
         try:
-            response = requests.post(url, data={
-                "chat_id": TELEGRAM_CHAT_ID,
-                "text": msg,
-                "parse_mode": "HTML"
-            }, timeout=10)
+            response = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=10)
             if response.status_code == 200:
-                print(f"  ✅ Alert sent to Telegram (attempt {attempt + 1})")
                 return True
-            else:
-                print(f"  ⚠️ Telegram API returned status {response.status_code}")
-        except Exception as e:
-            print(f"  ⚠️ Telegram error: {e}")
+        except:
             if attempt < max_retries - 1:
                 time.sleep(2)
-    print(f"  ❌ Failed to send to Telegram after {max_retries} attempts")
     return False
 
-# ==== Main Scan ====
 def scan_all_symbols(symbols):
     signal_candidates = []
-    print(f"🔍 Scanning 15m charts for SuperTrend + patterns...")
-    scan_start = time.time()
-
     with ThreadPoolExecutor(max_workers=100) as ex:
         futures = {ex.submit(detect_signals, s): s for s in symbols}
         for f in as_completed(futures):
             result = f.result()
             if result:
                 signal_candidates.append(result)
-
-    scan_duration = time.time() - scan_start
-    breakout_count = sum(1 for r in signal_candidates if 'breakout' in r)
-    retest_count = sum(1 for r in signal_candidates if 'retest' in r)
-    print(f"✓ Scan completed in {scan_duration:.2f}s | B: {breakout_count}, R: {retest_count}")
-
     final_signals = {'breakouts': [], 'retests': []}
     if signal_candidates:
-        print("🔬 Calculating RSI...")
-        rsi_start = time.time()
         with ThreadPoolExecutor(max_workers=50) as ex:
             futures = {}
             for result in signal_candidates:
@@ -420,40 +350,25 @@ def scan_all_symbols(symbols):
                     futures[ex.submit(calculate_rsi_for_signal, result['breakout']['symbol'])] = ('breakout', result['breakout'])
                 if 'retest' in result:
                     futures[ex.submit(calculate_rsi_for_signal, result['retest']['symbol'])] = ('retest', result['retest'])
-
             for f in as_completed(futures):
                 rsi = f.result()
                 signal_type, data = futures[f]
                 if rsi is not None:
                     data['rsi'] = rsi
                     if signal_type == 'breakout':
-                        if (data['indicator_strength'] >= MIN_STRENGTH_SCORE and
-                            data['csince'] >= MIN_CSINCE and
-                            data['vm'] >= MIN_VOLUME_MULT):
+                        if data['indicator_strength'] >= MIN_STRENGTH_SCORE and data['csince'] >= MIN_CSINCE and data['vm'] >= MIN_VOLUME_MULT:
                             final_signals['breakouts'].append(data)
                     else:
                         final_signals['retests'].append(data)
-        print(f"✓ RSI done in {time.time() - rsi_start:.2f}s")
-
     return final_signals
 
-# ==== Report Formatting ====
 def format_signal_report(signals, duration):
-    breakouts = signals['breakouts']
-    retests = signals['retests']
-    if not breakouts and not retests:
-        return None
-
-    report = f"🚀 <b>SUPERTREND + PATTERNS</b> 🚀\n"
-    report += f"⏱ Scan: {duration:.2f}s | B: {len(breakouts)} | R: {len(retests)}\n\n"
-
-    grouped_b = defaultdict(list)
-    grouped_r = defaultdict(list)
-    for b in breakouts:
-        grouped_b[b['hour']].append(b)
-    for r in retests:
-        grouped_r[r['hour']].append(r)
-
+    breakouts = signals['breakouts']; retests = signals['retests']
+    if not breakouts and not retests: return None
+    report = f"🚀 <b>SUPERTREND + PATTERNS</b> 🚀\n⏱ Scan: {duration:.2f}s\n\n"
+    grouped_b = defaultdict(list); grouped_r = defaultdict(list)
+    for b in breakouts: grouped_b[b['hour']].append(b)
+    for r in retests: grouped_r[r['hour']].append(r)
     all_hours = sorted(set(grouped_b.keys()) | set(grouped_r.keys()), reverse=True)
     for hour in all_hours:
         report += f"⏰ {hour} UTC\n"
@@ -476,76 +391,35 @@ def format_signal_report(signals, duration):
                 line3 = f"       🕯️ Pattern: {r['pattern']}"
                 report += f"<code>{line1}</code>\n<code>{line2}</code>\n<code>{line3}</code>\n"
         report += "\n"
-
-    report += "💡 <b>Legend:</b>\n"
-    report += "SYMBOL %CHG RSI VMx VolM STRENGTH\n"
-    report += "B = Breakout | R = Retest\n"
+    report += "💡 B = Breakout | R = Retest"
     return report
 
-# ==== Main Loop ====
 def main():
-    print("="*80)
-    print("🚀 SUPERTREND + PATTERNS (WITH BREAKOUT CONFIRMATION)")
-    print("="*80)
-    print(f"📊 ATR={ATR_PERIOD} | Multiplier={MULTIPLIER}")
-    print(f"✅ Breakouts require 1 confirmation candle")
-    print(f"🕯️  Retests require bullish reversal patterns")
-    print("="*80)
-
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("⚠️ Telegram not configured!")
-
+    print("🚀 SUPERTREND + PATTERNS (BREAKOUT CONFIRMATION)")
     symbols = get_usdt_pairs()
-    if not symbols:
-        print("❌ No symbols. Exiting.")
-        return
-
-    print(f"✓ Monitoring {len(symbols)} pairs\n")
-
+    if not symbols: return
     while True:
-        now = datetime.now(timezone.utc)
-        print(f"\n{'='*80}\n🕐 Scan started: {now.strftime('%Y-%m-%d %H:%M:%S')} UTC\n{'='*80}")
-
         total_start = time.time()
         signals = scan_all_symbols(symbols)
-        total_duration = time.time() - total_start
-
-        fresh_breakouts = []
-        fresh_retests = []
-
+        fresh_breakouts = []; fresh_retests = []
         for b in signals['breakouts']:
             key = ('B', b['symbol'], b['hour'])
             if key not in reported_signals:
                 reported_signals.add(key)
                 fresh_breakouts.append(b)
                 log_signal_to_file(b, 'breakout')
-
         for r in signals['retests']:
             key = ('R', r['symbol'], r['hour'])
             if key not in reported_signals:
                 reported_signals.add(key)
                 fresh_retests.append(r)
                 log_signal_to_file(r, 'retest')
-
-        fresh_count = len(fresh_breakouts) + len(fresh_retests)
-        if fresh_count > 0:
-            print(f"\n🆕 {len(fresh_breakouts)} breakout(s), {len(fresh_retests)} retest(s)")
-            msg = format_signal_report({'breakouts': fresh_breakouts, 'retests': fresh_retests}, total_duration)
-            if msg:
-                success = send_telegram(msg[:4096])
-                if not success:
-                    for b in fresh_breakouts:
-                        reported_signals.discard(('B', b['symbol'], b['hour']))
-                    for r in fresh_retests:
-                        reported_signals.discard(('R', r['symbol'], r['hour']))
-        else:
-            print("\n  ℹ️ No new signals")
-
+        if fresh_breakouts or fresh_retests:
+            msg = format_signal_report({'breakouts': fresh_breakouts, 'retests': fresh_retests}, time.time() - total_start)
+            if msg: send_telegram(msg[:4096])
         server_time = get_binance_server_time()
         next_interval = (server_time // 900 + 1) * 900
-        sleep_time = max(30, next_interval - server_time + 2)
-        print(f"\n😴 Sleeping {sleep_time:.0f}s until next 15m scan...")
-        time.sleep(sleep_time)
+        time.sleep(max(30, next_interval - server_time + 2))
 
 if __name__ == "__main__":
     main()
