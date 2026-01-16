@@ -17,6 +17,9 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RSI_PERIOD = 14
 reported_signals = set()
 
+# Track breakout levels per symbol: {symbol: red_line_value}
+pending_breakouts = {}
+
 MIN_STRENGTH_SCORE = 0
 MIN_CSINCE = 0
 MIN_VOLUME_MULT = 0.0
@@ -44,7 +47,7 @@ CUSTOM_TICKERS = [
     "SOMI","W","WAL","XPL","ZBT","ZKC","BREV","ZKP"
 ]
 
-LOG_FILE = Path("/tmp/supertrend_patterns_log.json")
+LOG_FILE = Path("/tmp/supertrend_persistent_breakout.log")
 
 session = requests.Session()
 adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=2)
@@ -162,7 +165,6 @@ def has_bullish_reversal_pattern(candles, idx, support_line):
     if is_bullish_pin_bar(candles, idx): return "Bullish Pin Bar"
     return None
 
-# ==== RSI & OTHER UTILS (UNCHANGED) ====
 def calculate_rsi(closes, period=14):
     if len(closes) < period + 1: return None
     changes = [closes[i] - closes[i-1] for i in range(1, len(closes))]
@@ -190,8 +192,9 @@ def calculate_strength_score_indicator(volume, vol_sma, close, supertrend_line, 
     momentum = abs(close - supertrend_line) / atr
     return min(math.log(vol_ratio + 1) * momentum, 10.0)
 
-# ==== SIGNAL DETECTION (BREAKOUT UPDATED) ====
+# ==== SIGNAL DETECTION WITH PERSISTENT BREAKOUT TRACKING ====
 def detect_signals(symbol):
+    global pending_breakouts
     try:
         url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=15m&limit=100"
         candles = session.get(url, timeout=5).json()
@@ -200,19 +203,16 @@ def detect_signals(symbol):
 
         last_idx = len(candles) - 2
         last_candle = candles[last_idx]
-        prev_candle = candles[last_idx - 1]
 
         candle_time = datetime.fromtimestamp(last_candle[0]/1000, tz=timezone.utc)
         hour = candle_time.strftime("%Y-%m-%d %H:%M")
 
-        prev_close = float(prev_candle[4])
         open_p = float(last_candle[1])
         high = float(last_candle[2])
         low = float(last_candle[3])
         close = float(last_candle[4])
         volume = float(last_candle[5])
         vol_usdt = open_p * volume
-        pct = ((close - prev_close) / prev_close) * 100
 
         st_result = calculate_supertrend_standard(candles[:last_idx+1], ATR_PERIOD, MULTIPLIER)
         if not st_result:
@@ -222,83 +222,78 @@ def detect_signals(symbol):
         up_band = st_result['up'][last_idx]
         dn_band = st_result['dn'][last_idx]
         direction = st_result['direction'][last_idx]
+        prev_direction = st_result['direction'][last_idx - 1] if last_idx >= 1 else -1
 
-        vol_ma_start = max(0, last_idx - VOL_LEN + 1)
-        vol_ma_data = [float(candles[j][5]) for j in range(vol_ma_start, last_idx + 1)]
-        vol_sma = sum(vol_ma_data) / len(vol_ma_data) if vol_ma_data else volume
-        vm = volume / vol_sma if vol_sma > 0 else 1.0
+        # ==== STEP 1: Detect NEW breakout (flip) ====
+        if prev_direction == -1 and direction == 1:
+            # Save the last red line (dn_band from previous state)
+            red_line = st_result['dn'][last_idx - 1]  # last downtrend value
+            pending_breakouts[symbol] = red_line
+            print(f"🆕 Breakout detected for {symbol}, red line = ${red_line:.6f}")
 
-        supertrend_line = up_band if direction == 1 else dn_band
-        indicator_strength = calculate_strength_score_indicator(volume, vol_sma, close, supertrend_line, atr)
-
+        # ==== STEP 2: Check if ANY pending breakout is confirmed ====
         results = {}
+        if symbol in pending_breakouts:
+            red_line = pending_breakouts[symbol]
+            if close > red_line:
+                # Calculate strength using red_line as reference
+                indicator_strength = calculate_strength_score_indicator(volume, 1.0, close, red_line, atr)
+                # Estimate csince (optional)
+                csince = 1  # since we don't track exact flip time, use 1
 
-        # ==== BREAKOUT: Confirm with next candle ====
-        if last_idx >= 2:
-            prev_dir = st_result['direction'][last_idx - 1]
-            prev_prev_dir = st_result['direction'][last_idx - 2]
-            # Flip happened on previous candle
-            if prev_prev_dir == -1 and prev_dir == 1:
-                st_line_at_flip = st_result['supertrend'][last_idx - 1]
-                if close > st_line_at_flip:
-                    csince = 500
-                    for look_back in range(2, min(500, last_idx)):
-                        idx = last_idx - look_back
-                        if idx < ATR_PERIOD:
+                results['breakout'] = {
+                    'symbol': symbol,
+                    'hour': hour,
+                    'pct': ((close - red_line) / red_line) * 100,
+                    'close': close,
+                    'supertrend_line': red_line,  # the red line!
+                    'csince': csince,
+                    'vol_usdt': vol_usdt,
+                    'vm': 1.0,
+                    'indicator_strength': indicator_strength
+                }
+                # Remove from pending after alert
+                del pending_breakouts[symbol]
+
+        # ==== RETEST: Unchanged (only in uptrend, not breakout) ====
+        if direction == 1 and symbol not in results:
+            touched_support = low <= up_band
+            held_support = close > up_band
+            if touched_support and held_support:
+                pattern_name = has_bullish_reversal_pattern(candles, last_idx, up_band)
+                if pattern_name:
+                    bars_since_breakout = 0
+                    for i in range(last_idx, ATR_PERIOD - 1, -1):
+                        past_st = calculate_supertrend_standard(candles[:i+1], ATR_PERIOD, MULTIPLIER)
+                        if past_st and past_st['direction'][i] == 1 and (i == ATR_PERIOD or past_st['direction'][i-1] == -1):
+                            bars_since_breakout = last_idx - i
                             break
-                        past_st = calculate_supertrend_standard(candles[:idx+1], ATR_PERIOD, MULTIPLIER)
-                        if past_st and past_st['direction'][idx] == 1 and (idx == ATR_PERIOD or past_st['direction'][idx-1] == -1):
-                            csince = look_back
-                            break
-                    results['breakout'] = {
+                    support_distance = ((close - up_band) / up_band) * 100
+                    vol_ma_start = max(0, last_idx - VOL_LEN + 1)
+                    vol_ma_data = [float(candles[j][5]) for j in range(vol_ma_start, last_idx + 1)]
+                    vol_sma = sum(vol_ma_data) / len(vol_ma_data) if vol_ma_data else volume
+                    vm = volume / vol_sma if vol_sma > 0 else 1.0
+                    indicator_strength = calculate_strength_score_indicator(volume, vol_sma, close, up_band, atr)
+                    results['retest'] = {
                         'symbol': symbol,
                         'hour': hour,
-                        'pct': pct,
+                        'pct': ((close - float(candles[last_idx-1][4])) / float(candles[last_idx-1][4])) * 100,
                         'close': close,
-                        'supertrend_line': st_line_at_flip,
-                        'csince': csince,
+                        'supertrend_line': up_band,
+                        'bars_since_breakout': bars_since_breakout,
                         'vol_usdt': vol_usdt,
                         'vm': vm,
-                        'indicator_strength': indicator_strength
+                        'indicator_strength': indicator_strength,
+                        'support_distance': support_distance,
+                        'pattern': pattern_name
                     }
-
-        # ==== RETEST: Unchanged ====
-        if direction == 1:
-            # Check if this is NOT a breakout (avoid double-signal)
-            is_breakout = 'breakout' in results
-            if not is_breakout:
-                touched_support = low <= up_band
-                held_support = close > up_band
-                if touched_support and held_support:
-                    pattern_name = has_bullish_reversal_pattern(candles, last_idx, up_band)
-                    if pattern_name:
-                        bars_since_breakout = 0
-                        for i in range(last_idx, ATR_PERIOD - 1, -1):
-                            past_st = calculate_supertrend_standard(candles[:i+1], ATR_PERIOD, MULTIPLIER)
-                            if past_st and past_st['direction'][i] == 1 and (i == ATR_PERIOD or past_st['direction'][i-1] == -1):
-                                bars_since_breakout = last_idx - i
-                                break
-                        support_distance = ((close - up_band) / up_band) * 100
-                        results['retest'] = {
-                            'symbol': symbol,
-                            'hour': hour,
-                            'pct': pct,
-                            'close': close,
-                            'supertrend_line': up_band,
-                            'bars_since_breakout': bars_since_breakout,
-                            'vol_usdt': vol_usdt,
-                            'vm': vm,
-                            'indicator_strength': indicator_strength,
-                            'support_distance': support_distance,
-                            'pattern': pattern_name
-                        }
 
         return results if results else None
 
-    except Exception:
+    except Exception as e:
         return None
 
-# ==== REST OF SCRIPT (RSI, TELEGRAM, MAIN LOOP) UNCHANGED ====
+# ==== RSI & TELEGRAM (SIMPLIFIED FOR BREAKOUT) ====
 def calculate_rsi_for_signal(symbol):
     try:
         url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=15m&limit=25"
@@ -356,8 +351,7 @@ def scan_all_symbols(symbols):
                 if rsi is not None:
                     data['rsi'] = rsi
                     if signal_type == 'breakout':
-                        if data['indicator_strength'] >= MIN_STRENGTH_SCORE and data['csince'] >= MIN_CSINCE and data['vm'] >= MIN_VOLUME_MULT:
-                            final_signals['breakouts'].append(data)
+                        final_signals['breakouts'].append(data)
                     else:
                         final_signals['retests'].append(data)
     return final_signals
@@ -378,8 +372,8 @@ def format_signal_report(signals, duration):
             for b in items:
                 sym = b['symbol'].replace("USDT", "")
                 st_dist_pct = ((b['close'] - b['supertrend_line']) / b['supertrend_line']) * 100
-                line1 = f"{sym:6s} {b['pct']:5.2f}% {b['rsi']:4.1f} {b['vm']:4.1f}x {format_volume(b['vol_usdt']):4s}M {b['indicator_strength']:5.2f}"
-                line2 = f"       🟢ST: ${b['supertrend_line']:.5f} ({st_dist_pct:+.2f}%)"
+                line1 = f"{sym:6s} {b['pct']:5.2f}% {b['rsi']:4.1f} 1.0x {format_volume(b['vol_usdt']):4s}M {b['indicator_strength']:5.2f}"
+                line2 = f"       🔴ST: ${b['supertrend_line']:.5f} ({st_dist_pct:+.2f}%)"
                 report += f"<code>{line1}</code>\n<code>{line2}</code>\n"
         if hour in grouped_r:
             items = sorted(grouped_r[hour], key=lambda x: x['indicator_strength'], reverse=True)
@@ -391,11 +385,11 @@ def format_signal_report(signals, duration):
                 line3 = f"       🕯️ Pattern: {r['pattern']}"
                 report += f"<code>{line1}</code>\n<code>{line2}</code>\n<code>{line3}</code>\n"
         report += "\n"
-    report += "💡 B = Breakout | R = Retest"
+    report += "💡 🔴 = Red line (breakout level) | 🟢 = Green line (retest)"
     return report
 
 def main():
-    print("🚀 SUPERTREND + PATTERNS (BREAKOUT CONFIRMATION)")
+    print("🚀 SUPERTREND + PERSISTENT BREAKOUT TRACKING")
     symbols = get_usdt_pairs()
     if not symbols: return
     while True:
