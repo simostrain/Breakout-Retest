@@ -17,7 +17,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 RSI_PERIOD = 14
 reported_signals = set()
 
-# Track breakout levels per symbol: {symbol: red_line_value}
+# Track pending breakouts: {symbol: red_line_value}
 pending_breakouts = {}
 
 MIN_STRENGTH_SCORE = 0
@@ -123,7 +123,7 @@ def calculate_supertrend_standard(candles, atr_period=10, multiplier=3.0):
         'atr': atr_vals
     }
 
-# ==== BULLISH REVERSAL PATTERNS (UNCHANGED) ====
+# ==== BULLISH REVERSAL PATTERNS ====
 def is_bullish_engulfing(candles, idx):
     if idx < 1: return False
     c1 = candles[idx-1]; c2 = candles[idx]
@@ -224,39 +224,36 @@ def detect_signals(symbol):
         direction = st_result['direction'][last_idx]
         prev_direction = st_result['direction'][last_idx - 1] if last_idx >= 1 else -1
 
-        # ==== STEP 1: Detect NEW breakout (flip) ====
+        # ==== STEP 1: Detect NEW breakout (flip from red to green) ====
         if prev_direction == -1 and direction == 1:
-            # Save the last red line (dn_band from previous state)
-            red_line = st_result['dn'][last_idx - 1]  # last downtrend value
+            # Save the last red line (dn_band from the last downtrend candle)
+            red_line = st_result['dn'][last_idx - 1]
             pending_breakouts[symbol] = red_line
-            print(f"🆕 Breakout detected for {symbol}, red line = ${red_line:.6f}")
 
-        # ==== STEP 2: Check if ANY pending breakout is confirmed ====
+        # ==== STEP 2: Check if ANY pending breakout is confirmed (close > red line) ====
         results = {}
         if symbol in pending_breakouts:
             red_line = pending_breakouts[symbol]
+            # ✅ STRICTLY GREATER THAN (not >=)
             if close > red_line:
                 # Calculate strength using red_line as reference
                 indicator_strength = calculate_strength_score_indicator(volume, 1.0, close, red_line, atr)
-                # Estimate csince (optional)
-                csince = 1  # since we don't track exact flip time, use 1
-
                 results['breakout'] = {
                     'symbol': symbol,
                     'hour': hour,
                     'pct': ((close - red_line) / red_line) * 100,
                     'close': close,
                     'supertrend_line': red_line,  # the red line!
-                    'csince': csince,
+                    'csince': 1,
                     'vol_usdt': vol_usdt,
                     'vm': 1.0,
                     'indicator_strength': indicator_strength
                 }
-                # Remove from pending after alert
+                # Remove from pending after successful alert
                 del pending_breakouts[symbol]
 
-        # ==== RETEST: Unchanged (only in uptrend, not breakout) ====
-        if direction == 1 and symbol not in results:
+        # ==== RETEST: Only if not a breakout and in uptrend ====
+        if direction == 1 and 'breakout' not in results:
             touched_support = low <= up_band
             held_support = close > up_band
             if touched_support and held_support:
@@ -274,10 +271,12 @@ def detect_signals(symbol):
                     vol_sma = sum(vol_ma_data) / len(vol_ma_data) if vol_ma_data else volume
                     vm = volume / vol_sma if vol_sma > 0 else 1.0
                     indicator_strength = calculate_strength_score_indicator(volume, vol_sma, close, up_band, atr)
+                    prev_close = float(candles[last_idx-1][4])
+                    pct = ((close - prev_close) / prev_close) * 100
                     results['retest'] = {
                         'symbol': symbol,
                         'hour': hour,
-                        'pct': ((close - float(candles[last_idx-1][4])) / float(candles[last_idx-1][4])) * 100,
+                        'pct': pct,
                         'close': close,
                         'supertrend_line': up_band,
                         'bars_since_breakout': bars_since_breakout,
@@ -290,10 +289,10 @@ def detect_signals(symbol):
 
         return results if results else None
 
-    except Exception as e:
+    except Exception:
         return None
 
-# ==== RSI & TELEGRAM (SIMPLIFIED FOR BREAKOUT) ====
+# ==== RSI & TELEGRAM ====
 def calculate_rsi_for_signal(symbol):
     try:
         url = f"{BINANCE_API}/api/v3/klines?symbol={symbol}&interval=15m&limit=25"
@@ -389,31 +388,42 @@ def format_signal_report(signals, duration):
     return report
 
 def main():
-    print("🚀 SUPERTREND + PERSISTENT BREAKOUT TRACKING")
+    print("🚀 SUPERTREND + PERSISTENT BREAKOUT TRACKING (STRICT CLOSE > RED LINE)")
     symbols = get_usdt_pairs()
-    if not symbols: return
+    if not symbols:
+        print("❌ No symbols loaded")
+        return
+
+    print(f"✓ Monitoring {len(symbols)} pairs\n")
+
     while True:
         total_start = time.time()
         signals = scan_all_symbols(symbols)
         fresh_breakouts = []; fresh_retests = []
+
         for b in signals['breakouts']:
             key = ('B', b['symbol'], b['hour'])
             if key not in reported_signals:
                 reported_signals.add(key)
                 fresh_breakouts.append(b)
                 log_signal_to_file(b, 'breakout')
+
         for r in signals['retests']:
             key = ('R', r['symbol'], r['hour'])
             if key not in reported_signals:
                 reported_signals.add(key)
                 fresh_retests.append(r)
                 log_signal_to_file(r, 'retest')
+
         if fresh_breakouts or fresh_retests:
             msg = format_signal_report({'breakouts': fresh_breakouts, 'retests': fresh_retests}, time.time() - total_start)
-            if msg: send_telegram(msg[:4096])
+            if msg:
+                send_telegram(msg[:4096])
+
         server_time = get_binance_server_time()
         next_interval = (server_time // 900 + 1) * 900
-        time.sleep(max(30, next_interval - server_time + 2))
+        sleep_time = max(30, next_interval - server_time + 2)
+        time.sleep(sleep_time)
 
 if __name__ == "__main__":
     main()
