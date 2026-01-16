@@ -1,7 +1,4 @@
-# Binance Pump Scanner (1H)
 
-Python script that scans Binance 1H candles and sends Telegram alerts
-when price increase >= 2.9%.
 
 ## Environment Variables
 - TELEGRAM_BOT_TOKEN
